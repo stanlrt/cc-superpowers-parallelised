@@ -13,6 +13,16 @@ Only three skills carry custom behavior (everything else tracks upstream verbati
   check. Per-task review via git tree snapshots (`scripts/snapshot` + `review-package`
   diffing tree-ish, `-- <paths>` scoping). Disjoint-file parallel subagents run in the
   background. Sonnet implementers; advisor only when the plan itself is defective.
+  Adds a whole-branch **refactor reviewer** (`refactor-reviewer-prompt.md`)
+  after the final correctness review — a design lens (dead code via
+  consumer-grep, cross-task duplication, messy hardcodes, smells), hybrid by
+  severity: mechanical/evidence-backed findings auto-fix, design opinions go to
+  `.superpowers/sdd/refactor-report.md` for human triage at branch finish.
+  Pre-Flight batching is script-driven: the controller declares files +
+  real produce/consume edges in `.superpowers/sdd/deps.txt`, and
+  `scripts/plan-batches` (python3, stdlib-only) computes the batch topology
+  deterministically — rejecting phantom edges whose `consumes=` names a theme
+  rather than a symbol, so controllers stop over-serializing "related" tasks.
 - **finishing-a-development-branch** — PR body from the repo's PR template via
   `--body-file`; after opening, monitor CI + Copilot + Code-Quality comments.
 - **using-git-worktrees** — GitHub issue → linked branch entry points.

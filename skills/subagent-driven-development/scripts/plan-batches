@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+# Compute the parallel execution plan for Subagent-Driven Development from a
+# declared dependency file — deterministically, so the controller does not
+# decide batching by hand and cannot default to "all sequential to be safe."
+#
+# WHY THIS EXISTS. Controllers reliably fail one specific judgement: they call
+# two tasks dependent because they are thematically "related" ("this file
+# implements a change related to that one, so let's wait"), even when neither
+# consumes a symbol the other produces. That phantom edge serializes work that
+# could run in parallel. This script removes the discretion: the controller
+# only DECLARES edges (each naming the concrete produced/consumed symbol), and
+# the script — not the controller — computes the batches. An edge with no
+# nameable consumed symbol is rejected, not honoured. Parallelism is the
+# default; a serial edge must be justified by a real symbol.
+#
+# INPUT FORMAT (plain text, one stanza per task, blank-line separated).
+# Deliberately not YAML/JSON: no external parser, no trailing-comma traps, and
+# a missing `consumes=` is impossible to hand-wave past.
+#
+#     task: task-1
+#     files: src/auth.py tests/auth_test.py
+#
+#     task: task-2
+#     files: src/handler.py
+#     needs: task-1 consumes=parseToken
+#     needs: task-3 consumes=RouteTable enum
+#
+#   task:   REQUIRED, unique. The task's id (any token: "task-1", "3", "auth").
+#   files:  REQUIRED, non-empty. Whitespace-separated pathspecs the task
+#           writes. Used for the within-layer file-collision split AND handed
+#           downstream to review-package as the task's scope.
+#   needs:  ZERO or more, one edge each. "<task-id> consumes=<symbol...>".
+#           The target must be another declared task. `consumes=` is MANDATORY
+#           and must name a concrete thing this task references that the target
+#           creates or changes — a symbol, interface, signature, schema,
+#           constant, route, or contract. Everything after `consumes=` to end
+#           of line is the symbol text. A vague value ("related", "similar",
+#           "theme", ...) is rejected: that is not a dependency, it is a theme.
+#
+# An edge A<-B (B needs A) means B must run in a LATER batch than A.
+#
+# OUTPUT. Prints the batch plan to stdout: batch 1 is every task with no unmet
+# dependency; batch 2 every task whose deps are all in batch 1; and so on.
+# Within a batch, tasks are guaranteed both mutually independent AND
+# file-disjoint (file-overlapping tasks in the same dependency layer are split
+# into separate batches). Reasons for any split are noted. On a bad input
+# (missing field, dangling edge, vague consumes, dependency cycle) it prints
+# the specific problem to stderr and exits non-zero WITHOUT printing a plan —
+# a plan gap must be fixed, never silently serialized around.
+#
+# Usage: plan-batches [DEPS_FILE]
+#   DEPS_FILE   path to the declared-dependency file.
+#               Default: <repo-root>/.superpowers/sdd/deps.txt
+#
+# Exit: 0 plan printed; 2 usage; 3 invalid input (see stderr).
+
+import sys
+import os
+import subprocess
+
+# consumes= values that are not real dependencies — a theme, not a symbol.
+VAGUE = {
+    "related", "relates", "similar", "same", "theme", "thematic", "see",
+    "also", "connected", "part", "linked", "associated", "context",
+    "together", "adjacent", "nearby", "samearea", "samefeature", "n/a",
+    "na", "none", "tbd", "todo", "unknown", "misc", "general",
+}
+
+
+def die(msg):
+    sys.stderr.write("plan-batches: " + msg + "\n")
+    sys.exit(3)
+
+
+def default_deps_path():
+    try:
+        root = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
+        return None
+    return os.path.join(root, ".superpowers", "sdd", "deps.txt")
+
+
+def parse(path):
+    """Parse the deps file into {task_id: {"files":[...], "needs":[(target,symbol,lineno)]}}."""
+    tasks = {}
+    order = []            # declaration order, for stable output
+    cur = None
+    with open(path, "r", encoding="utf-8") as fh:
+        for lineno, raw in enumerate(fh, 1):
+            line = raw.rstrip("\n")
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if ":" not in stripped:
+                die("line %d: expected 'key: value', got %r" % (lineno, stripped))
+            key, _, val = stripped.partition(":")
+            key = key.strip().lower()
+            val = val.strip()
+
+            if key == "task":
+                if not val:
+                    die("line %d: empty task id" % lineno)
+                if val in tasks:
+                    die("line %d: duplicate task id %r" % (lineno, val))
+                cur = val
+                tasks[cur] = {"files": [], "needs": []}
+                order.append(cur)
+            elif key == "files":
+                if cur is None:
+                    die("line %d: 'files:' before any 'task:'" % lineno)
+                tasks[cur]["files"].extend(val.split())
+            elif key == "needs":
+                if cur is None:
+                    die("line %d: 'needs:' before any 'task:'" % lineno)
+                target, sym = parse_needs(val, lineno, cur)
+                tasks[cur]["needs"].append((target, sym, lineno))
+            else:
+                die("line %d: unknown key %r (expected task/files/needs)" % (lineno, key))
+    if not tasks:
+        die("no tasks declared in %s" % path)
+    return tasks, order
+
+
+def parse_needs(val, lineno, cur):
+    """Validate one 'needs:' value: '<task-id> consumes=<symbol...>'."""
+    if "consumes=" not in val:
+        die("line %d: needs of %r has no consumes=<symbol>. Every dependency "
+            "must name the concrete symbol/interface/schema/constant/route "
+            "this task references that the target produces. If you cannot name "
+            "one, it is not a dependency — drop the edge." % (lineno, cur))
+    target_part, _, sym = val.partition("consumes=")
+    target = target_part.strip()
+    sym = sym.strip()
+    if not target:
+        die("line %d: needs of %r names no target task before consumes=" % (lineno, cur))
+    if len(target.split()) != 1:
+        die("line %d: needs of %r target must be a single task id, got %r"
+            % (lineno, cur, target))
+    if target == cur:
+        die("line %d: task %r cannot depend on itself" % (lineno, cur))
+    if not sym:
+        die("line %d: consumes= of %r is empty. Name the produced symbol."
+            % (lineno, cur))
+    if is_vague(sym):
+        die("line %d: consumes=%r of %r is a theme, not a symbol. A shared "
+            "theme is not a dependency — declare an edge only when this task's "
+            "code references a symbol the target creates. Drop this edge or "
+            "name the real symbol." % (lineno, sym, cur))
+    return target, sym
+
+
+def is_vague(sym):
+    """True when consumes= names no real symbol — only theme words."""
+    words = [w for w in sym.replace("-", "").replace("_", "").split() if w]
+    real = [w for w in words if w.lower() not in VAGUE and len(w) >= 2]
+    return not real
+
+
+def validate_edges(tasks):
+    for tid, t in tasks.items():
+        if not t["files"]:
+            die("task %r declares no files. Every task must list the files it "
+                "writes (for the collision check and review scoping)." % tid)
+        for target, sym, lineno in t["needs"]:
+            if target not in tasks:
+                die("line %d: task %r depends on %r, which is not a declared "
+                    "task" % (lineno, tid, target))
+
+
+def layer(tasks, order):
+    """Kahn-style longest-path layering. Returns list of layers (lists of ids)
+    in declaration order within each layer. Dies on a cycle."""
+    # deps[tid] = set of tasks tid must follow
+    deps = {tid: set(tt for tt, _, _ in t["needs"]) for tid, t in tasks.items()}
+    placed = {}
+    remaining = set(tasks)
+    layers = []
+    while remaining:
+        ready = [tid for tid in order
+                 if tid in remaining and deps[tid] <= placed.keys()]
+        if not ready:
+            cyc = ", ".join(sorted(remaining))
+            die("dependency cycle among: %s. Break the cycle — at least one of "
+                "these edges is not a real produce/consume relationship." % cyc)
+        for tid in ready:
+            placed[tid] = True
+            remaining.discard(tid)
+        layers.append(ready)
+    return layers
+
+
+def split_file_collisions(layer_tasks, tasks):
+    """Greedily split one dependency layer into file-disjoint sub-batches.
+    Tasks in the same layer have no dependency edge between them, but may still
+    write the same file — those cannot run concurrently. Returns
+    (sub_batches, collisions) where collisions notes what forced a split."""
+    sub_batches = []       # list of (task_ids, owner) where owner maps file -> task_id
+    collisions = []
+    for tid in layer_tasks:
+        files = set(tasks[tid]["files"])
+        for ids, owner in sub_batches:
+            clash = files & owner.keys()
+            if not clash:
+                ids.append(tid)
+                for f in files:
+                    owner[f] = tid
+                break
+            # record why this task could not join this sub-batch, naming the
+            # task that actually owns each clashing file (not just any member)
+            for f in sorted(clash):
+                collisions.append((tid, owner[f], f))
+        else:
+            sub_batches.append(([tid], {f: tid for f in files}))
+    return [ids for ids, _ in sub_batches], collisions
+
+
+def main():
+    args = sys.argv[1:]
+    if len(args) > 1:
+        sys.stderr.write("usage: plan-batches [DEPS_FILE]\n")
+        sys.exit(2)
+    path = args[0] if args else default_deps_path()
+    if not path:
+        sys.stderr.write("plan-batches: not in a git repo and no DEPS_FILE given\n")
+        sys.exit(2)
+    if not os.path.isfile(path):
+        sys.stderr.write("plan-batches: no such deps file: %s\n" % path)
+        sys.exit(2)
+
+    tasks, order = parse(path)
+    validate_edges(tasks)
+    layers = layer(tasks, order)
+
+    batches = []
+    notes = []
+    for li, layer_tasks in enumerate(layers, 1):
+        subs, collisions = split_file_collisions(layer_tasks, tasks)
+        for c_tid, owner_tid, f in collisions:
+            notes.append("  %s and %s both write %s — split into separate batches"
+                         % (c_tid, owner_tid, f))
+        batches.extend(subs)
+
+    n_par = sum(1 for b in batches if len(b) > 1)
+    print("BATCH PLAN — %d task(s), %d batch(es), %d parallel batch(es)"
+          % (len(tasks), len(batches), n_par))
+    print("source: %s" % path)
+    print("")
+    for i, b in enumerate(batches, 1):
+        kind = "parallel" if len(b) > 1 else "single"
+        print("batch %d (%s): %s" % (i, kind, ", ".join(b)))
+        for tid in b:
+            print("    %s -> files: %s" % (tid, " ".join(tasks[tid]["files"])))
+    if notes:
+        print("")
+        print("file-collision splits (same layer, overlapping files):")
+        for line in notes:
+            print(line)
+    print("")
+    print("Each batch above is mutually independent AND file-disjoint: dispatch "
+          "its tasks concurrently in the background, review each against only "
+          "its own files, then commit each. Run batches in order.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

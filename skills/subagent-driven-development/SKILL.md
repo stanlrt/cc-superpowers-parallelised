@@ -5,7 +5,7 @@ description: Use when executing implementation plans with independent tasks in t
 
 # Subagent-Driven Development
 
-Execute plan by dispatching a fresh implementer subagent per task, a task review (spec compliance + code quality) after each, and a broad whole-branch review at the end.
+Execute plan by dispatching a fresh implementer subagent per task, a task review (spec compliance + code quality) after each, then two whole-branch passes at the end: a correctness review, then a refactor review (design lens — dead code, cross-task duplication, messy hardcodes, smells).
 
 **Why subagents:** You delegate tasks to specialized agents with isolated context. By precisely crafting their instructions and context, you ensure they stay focused and succeed at their task. They should never inherit your session's context or history — you construct exactly what they need. This also preserves your own context for coordination work.
 
@@ -18,23 +18,14 @@ confirmed its changes do not collide with other tasks. You hold the whole-run
 overview; a subagent committing mid-stream would break per-task review
 isolation and could entangle parallel tasks. See [Committing](#committing).
 
-**Parallelisation (disjoint files AND independent).** Tasks run as concurrent
-subagents in the one shared feature worktree — no extra worktree per
-subagent — only when their file sets do not overlap *and* neither depends on
-the other's output (a symbol/interface/schema/contract one creates and the
-other consumes). Disjoint files alone is not enough: a dependency forces
-ordering even when no file is shared. The batches come from the mandatory
-Pre-Flight batch plan (see [Pre-Flight Plan Review](#pre-flight-plan-review))
-— you build the dependency DAG and partition up front, you do not decide
-per-task as you go. Use superpowers-custom:dispatching-parallel-agents to fan them
-out. **Dispatch them in the background (non-blocking) in a single batch** so
-they run concurrently — a blocking dispatch waits for each to finish and
-serializes the batch, defeating the point. In Claude Code, launch each with the
-Task/Agent tool set to run in the background and collect their results as they
-return. They do not commit. When the batch returns, review each task against
-only its own files (`review-package BASE AFTER -- <that task's files>`), confirm
-the tasks did not collide on any file, then commit each. If two tasks' file
-sets overlap, run them sequentially instead.
+**Parallelisation.** Tasks run as concurrent subagents in the one shared
+feature worktree — no extra worktree per subagent. Which tasks batch together
+is computed by `scripts/plan-batches`, not decided by you (see
+[Pre-Flight Plan Review](#pre-flight-plan-review)). To dispatch a batch, use
+superpowers-custom:dispatching-parallel-agents and launch every task in the
+batch **in the background (non-blocking) in a single message** — a blocking
+dispatch serializes them and defeats the point. When the batch returns, review
+and commit each task per its own files ([Committing](#committing)).
 
 **Narration:** between tool calls, narrate at most one short line — the
 ledger and the tool results carry the record.
@@ -89,6 +80,10 @@ digraph process {
     "Read plan, note context and global constraints, create todos" [shape=box];
     "More tasks remain?" [shape=diamond];
     "Dispatch final code reviewer subagent (../requesting-code-review/code-reviewer.md)" [shape=box];
+    "Dispatch refactor reviewer subagent (./refactor-reviewer-prompt.md)" [shape=box];
+    "Refactor-Critical findings?" [shape=diamond];
+    "Fix loop: dispatch fix subagent, re-review; commit fixes" [shape=box];
+    "Write Refactor-Advisory items to refactor-report.md for human triage" [shape=box];
     "Use superpowers-custom:finishing-a-development-branch" [shape=box style=filled fillcolor=lightgreen];
 
     "Read plan, note context and global constraints, create todos" -> "Dispatch implementer subagent (./implementer-prompt.md)";
@@ -105,7 +100,12 @@ digraph process {
     "Mark task complete in todo list and progress ledger" -> "More tasks remain?";
     "More tasks remain?" -> "Dispatch implementer subagent (./implementer-prompt.md)" [label="yes"];
     "More tasks remain?" -> "Dispatch final code reviewer subagent (../requesting-code-review/code-reviewer.md)" [label="no"];
-    "Dispatch final code reviewer subagent (../requesting-code-review/code-reviewer.md)" -> "Use superpowers-custom:finishing-a-development-branch";
+    "Dispatch final code reviewer subagent (../requesting-code-review/code-reviewer.md)" -> "Dispatch refactor reviewer subagent (./refactor-reviewer-prompt.md)" [label="correctness clean"];
+    "Dispatch refactor reviewer subagent (./refactor-reviewer-prompt.md)" -> "Refactor-Critical findings?";
+    "Refactor-Critical findings?" -> "Fix loop: dispatch fix subagent, re-review; commit fixes" [label="yes"];
+    "Fix loop: dispatch fix subagent, re-review; commit fixes" -> "Refactor-Critical findings?" [label="re-review"];
+    "Refactor-Critical findings?" -> "Write Refactor-Advisory items to refactor-report.md for human triage" [label="none / all fixed"];
+    "Write Refactor-Advisory items to refactor-report.md for human triage" -> "Use superpowers-custom:finishing-a-development-branch";
 }
 ```
 
@@ -126,31 +126,89 @@ before execution begins, not one interrupt per discovery mid-plan. If the
 scan is clean, proceed without comment. The review loop remains the net for
 conflicts that only emerge from implementation.
 
-**2. Batch plan (mandatory — do not default to sequential).** Two tasks may
-share a batch only if BOTH hold:
+**2. Batch plan (mandatory — the script computes it, not you).** You do NOT
+decide batching by judgment. You DECLARE each task's files and dependencies in
+a file; `scripts/plan-batches` computes the execution order deterministically.
+This exists because the one judgement controllers reliably get wrong is
+calling two tasks dependent because they are thematically "related" ("this
+file changes something related to that one, so let's wait") — a phantom edge
+that serializes work that could run in parallel. The script removes that
+discretion: it honours only edges that name a real produced/consumed symbol,
+and it does the layering so you cannot fall back to "all sequential to be
+safe."
 
-- **Disjoint files** — their file sets do not overlap, so neither overwrites
-  the other (prevents write collision).
-- **Independent** — neither consumes a thing the other produces. Even with
-  disjoint files, task B depends on task A when B's code references a symbol,
-  interface, signature, schema, constant, route, or contract that A creates
-  or changes. A produces, B consumes → B runs in a later batch than A.
-  File-disjointness does not imply independence.
+A dependency edge exists between two tasks ONLY when both are true; the script
+enforces the second:
 
-Build the plan as a dependency DAG, not a file-overlap check alone: nodes are
-tasks, draw an edge A→B when B depends on A's output. Then layer it —
-batch 1 is every task with no unmet dependency; batch 2 is every task whose
-dependencies are all in batch 1; and so on. Within a layer, split any pair
-that shares a file into separate batches (or sequence them). Each resulting
-batch holds only tasks that are mutually independent AND file-disjoint.
+- **Disjoint files** — their file sets do not overlap (a write collision, not
+  a dependency — the script splits same-layer file-overlapping tasks into
+  separate batches automatically).
+- **Real produce/consume** — task B depends on task A only when B's code
+  references a concrete symbol, interface, signature, schema, constant, route,
+  or contract that A creates or changes. A shared theme is NOT a dependency.
+  If you cannot name the symbol B consumes, there is no edge — the tasks are
+  independent.
 
-Write this batch plan into the progress ledger before dispatching — it is the
-execution order, not an optimization you bolt on later. Do NOT walk the tasks
-one-by-one and decide parallelism reactively at each step; that defaults to
-sequential and silently discards the speedup. A batch of one task is fine —
-but you must have partitioned to know that, not assumed it. If you cannot
-derive a task's file set or its dependencies from the plan, that is a plan
-gap: resolve it before execution, not by falling back to sequential.
+**Procedure:**
+
+1. Write `.superpowers/sdd/deps.txt` — one stanza per task: its `task:` id, the
+   `files:` it writes, and a `needs:` line per real dependency naming the
+   consumed symbol (`needs: task-1 consumes=parseToken`). The format and rules
+   are documented at the top of `scripts/plan-batches`. Declare an edge ONLY
+   with a nameable symbol; when in doubt, leave it out and let the file-collision
+   split and the per-task review catch a genuine conflict.
+2. Run `scripts/plan-batches` (defaults to that path). It prints the batch plan,
+   or exits non-zero naming a specific problem: a `needs:` with no
+   `consumes=`, a vague `consumes=` ("related", "similar", "theme", …), a
+   dangling edge, a dependency cycle, or a task with no files. Each of those is
+   a plan gap — fix the declaration (or the plan), do not work around it by
+   serializing.
+3. Copy the printed batch plan into the progress ledger. That is the execution
+   order: dispatch each batch's tasks concurrently in the background, run
+   batches in order. A batch of one task is a computed result, not a default.
+
+If you cannot derive a task's file set or its real dependencies from the plan,
+that is a plan gap: resolve it before execution, not by falling back to
+sequential.
+
+**Worked example.** A 4-task plan. Task 2 calls a function Task 1 writes; Task
+4 uses a constant Task 1 defines; Task 3 shares no symbol with anyone but
+writes a file Task 1 also touches. You write:
+
+```
+task: task-1
+files: src/auth.py
+
+task: task-2
+files: src/handler.py
+needs: task-1 consumes=parseToken
+
+task: task-3
+files: src/auth.py
+
+task: task-4
+files: src/config_check.py
+needs: task-1 consumes=AUTH_TIMEOUT
+```
+
+Run `scripts/plan-batches` → it prints:
+
+```
+batch 1 (single): task-1
+batch 2 (single): task-3
+batch 3 (parallel): task-2, task-4
+
+file-collision splits (same layer, overlapping files):
+  task-3 and task-1 both write src/auth.py — split into separate batches
+```
+
+Read what the script did that you would have gotten wrong by hand: task-2 and
+task-4 both depend on task-1 but NOT on each other — no shared symbol — so they
+run **concurrently** in batch 3. A cautious controller would have serialized
+all four. task-3 has no dependency at all, yet it can't join task-1's batch
+because they write the same file, so it lands in its own batch (2). And no edge
+says `consumes=auth` or `consumes=related` — every edge names the actual
+symbol, or it is not an edge.
 
 ## Model Selection
 
@@ -169,36 +227,26 @@ answer back into the plan/brief, then continue on Sonnet. Routine
 implementation never calls the advisor. The final whole-branch review is the
 other most-capable dispatch (see below).
 
-Beyond that default, use the least powerful model that can handle each role to conserve cost and increase speed.
+Beyond that default, use the least powerful model that can handle each role.
+Pick by what the task actually demands:
 
-**Mechanical implementation tasks** (isolated functions, clear specs, 1-2 files): use a fast, cheap model. Most implementation tasks are mechanical when the plan is well-specified.
+- **Cheapest tier** — the plan text contains the complete code (transcription
+  + testing), or a single-file mechanical fix. Touches 1-2 files, complete spec.
+- **Standard/mid tier** — integration and judgment: multi-file coordination,
+  pattern matching, debugging, or an implementer working from prose. This is
+  also the floor for reviewers.
+- **Most capable** — architecture and design judgment, or broad codebase
+  understanding. The final correctness review AND the refactor review are both
+  this tier. Reviews scale with the diff: a subtle concurrency change needs it,
+  a small mechanical diff does not.
 
-**Integration and judgment tasks** (multi-file coordination, pattern matching, debugging): use a standard model.
+**Turn count beats token price.** The cheapest models routinely take 2-3× the
+turns on multi-step work, costing more overall — hence the mid-tier floor for
+reviewers and prose-fed implementers.
 
-**Architecture and design tasks**: use the most capable available model.
-The final whole-branch review is one of these — dispatch it on the most
-capable available model, not the session default.
-
-**Review tasks**: choose the model with the same judgment, scaled to the
-diff's size, complexity, and risk. A small mechanical diff does not need the
-most capable model; a subtle concurrency change does.
-
-**Always specify the model explicitly when dispatching a subagent.** An
-omitted model inherits your session's model — often the most capable and
-most expensive — which silently defeats this section.
-
-**Turn count beats token price.** Wall-clock and context cost scale with how
-many turns a subagent takes, and the cheapest models routinely take 2-3× the
-turns on multi-step work — costing more overall. Use a mid-tier model as the
-floor for reviewers and for implementers working from prose descriptions.
-When the task's plan text contains the complete code to write, the
-implementation is transcription plus testing: use the cheapest tier for
-that implementer. Single-file mechanical fixes also take the cheapest tier.
-
-**Task complexity signals (implementation tasks):**
-- Touches 1-2 files with a complete spec → cheap model
-- Touches multiple files with integration concerns → standard model
-- Requires design judgment or broad codebase understanding → most capable model
+**Always specify the model explicitly when dispatching.** An omitted model
+inherits your session's model — often the most capable and expensive — which
+silently defeats this section.
 
 ## Handling Implementer Status
 
@@ -253,15 +301,11 @@ final whole-branch review. When you fill a reviewer template:
   Y"). The reviewer's template already carries the process rules (YAGNI,
   test hygiene, review method) — the constraints block is for what THIS
   project's spec demands.
-- Hand the reviewer its diff as a file: run this skill's
-  `scripts/review-package BASE AFTER` (BASE = `HEAD^{tree}` for a sequential
-  task, or the pre-batch snapshot; AFTER = `scripts/snapshot`; add
-  `-- <task files>` for one task of a parallel batch) and pass the reviewer
-  the file path it prints (or, without bash: `git diff --stat BASE AFTER`
-  and `git diff -U10 BASE AFTER`, redirected to one uniquely named file).
-  The output never enters your own context, and the reviewer sees the stat
-  summary and full diff with context in one Read call. The work is
-  uncommitted, so the package has no commit list — that is expected.
+- Hand the reviewer its diff as a file — the `scripts/review-package` path
+  from [Handling Implementer Status](#handling-implementer-status), never
+  pasted into your own context. The package has no commit list (the work is
+  uncommitted) — that is expected. Without bash: `git diff --stat BASE AFTER`
+  and `git diff -U10 BASE AFTER` redirected to one uniquely named file.
 - A dispatch prompt describes one task, not the session's history. Do not
   paste accumulated prior-task summaries ("state after Tasks 1-3") into
   later dispatches — a real session's dispatch hit 42k chars of which 99%
@@ -291,6 +335,51 @@ final whole-branch review. When you fill a reviewer template:
   subagent with the complete findings list — not one fixer per finding.
   Per-finding fixers each rebuild context and re-run suites; a real
   session's final-review fix wave cost more than all its tasks combined.
+
+## Refactor Review (whole-branch, final gate)
+
+After the final correctness review comes back clean, dispatch one more
+whole-branch pass: the **refactor reviewer** (./refactor-reviewer-prompt.md).
+It is a different lens from every review before it. The per-task reviewer and
+the final correctness reviewer answer "does it work / match spec." This one
+answers "now that it works, is it well-shaped, or should something be
+refactored before merge" — design smells, cross-task duplication, messy
+hardcodes, dead code, missing or leaky abstractions.
+
+**Why it must be whole-branch and late.** These are properties of the
+assembled branch, not of any one task's diff. A symbol added in Task 1 and
+consumed in Task 5 looks dead in Task 1's scoped review; duplication between
+two tasks is invisible until both land; a hardcode is only "messy" relative
+to a constant another task defined. Independent task subagents never saw each
+other's code, so they reinvent helpers and constants — only a pass over the
+whole branch catches it. Unlike the per-task reviewer, this reviewer MAY read
+the whole codebase (it must, to grep every new symbol for a real consumer).
+
+**Hybrid by severity — two buckets, two fates:**
+
+- **Refactor-Critical (mechanical, auto-fix).** Objectively verifiable and
+  evidence-backed: dead code (grep shows zero real consumers), exact/near-exact
+  duplication (both ranges cited), a hardcode that duplicates an existing named
+  constant (both locations cited). Handle these exactly like task-review
+  findings — dispatch ONE fix subagent with the complete Critical list, the
+  fix carries the implementer contract (re-run covering tests, report results),
+  then re-run the refactor package and re-review the Critical bucket. Commit
+  the fixes yourself. A Critical finding that arrives without its evidence is
+  downgraded to Advisory — do not auto-fix it.
+- **Refactor-Advisory (design opinion, human triage).** Judgment calls where
+  engineers reasonably differ — "could extract," a God-function forming,
+  primitive obsession, naming drift, a shape that will bite later. Do NOT
+  auto-fix these — auto-rewriting working, tested code on an opinion is churn.
+  Write them to `.superpowers/sdd/refactor-report.md` and carry them into
+  superpowers-custom:finishing-a-development-branch, where the human triages
+  each: fix now, ticket, or accept. A roll-up nobody reads is a silent discard.
+
+A clean branch with zero findings is a valid, expected result — this reviewer
+does not manufacture refactors, and YAGNI makes a speculative abstraction a
+smell, not a fix. Dispatch it on the most capable available model (design
+judgment, same tier as the final correctness review), and reuse the same
+branch package the final review used (`scripts/review-package MERGE_BASE HEAD`)
+rather than regenerating it.
 
 ## File Handoffs
 
@@ -367,6 +456,7 @@ a ledger file, not only in todos.
 - [implementer-prompt.md](implementer-prompt.md) - Dispatch implementer subagent
 - [task-reviewer-prompt.md](task-reviewer-prompt.md) - Dispatch task reviewer subagent (spec compliance + code quality)
 - Final whole-branch review: use superpowers-custom:requesting-code-review's [code-reviewer.md](../requesting-code-review/code-reviewer.md)
+- [refactor-reviewer-prompt.md](refactor-reviewer-prompt.md) - Dispatch whole-branch refactor reviewer (design lens: dead code, duplication, hardcodes, smells) after the final correctness review is clean
 
 ## Example Workflow
 
@@ -429,90 +519,54 @@ Task reviewer: Spec ✅. Task quality: Approved.
 [Dispatch final code-reviewer]
 Final reviewer: All requirements met, ready to merge
 
-Done!
+[Correctness clean — dispatch refactor reviewer with the same branch package]
+Refactor reviewer:
+  Well-shaped: config loader, error types
+  Refactor-Critical: parseTimeout() in retry.ts:40 duplicates parseDuration()
+    in util.ts:12 (both ranges cited); MAX_RETRIES literal 5 in retry.ts:8
+    duplicates existing RETRY_LIMIT in config.ts:20
+  Refactor-Advisory: Task 3's Handler is growing into a God-object — consider
+    splitting transport from routing
+  Refactor before merge? Critical fixes only
+
+[Dispatch one fix subagent with both Critical findings; fixer re-runs covering
+ tests; re-review Critical bucket → clean; commit fixes]
+[Write the advisory God-object note to .superpowers/sdd/refactor-report.md]
+
+Done! (carry refactor-report.md into finishing-a-development-branch)
 ```
-
-## Advantages
-
-**vs. Manual execution:**
-- Subagents follow TDD naturally
-- Fresh context per task (no confusion)
-- Parallel-safe (subagents don't interfere)
-- Subagent can ask questions (before AND during work)
-
-**vs. Executing Plans:**
-- Same session (no handoff)
-- Continuous progress (no waiting)
-- Review checkpoints automatic
-
-**Efficiency gains:**
-- Controller curates exactly what context is needed; bulk artifacts move
-  as files, not pasted text
-- Subagent gets complete information upfront
-- Questions surfaced before work begins (not after)
-
-**Quality gates:**
-- Self-review catches issues before handoff
-- Task review carries two verdicts: spec compliance and code quality
-- Review loops ensure fixes actually work
-- Spec compliance prevents over/under-building
-- Code quality ensures implementation is well-built
-
-**Cost:**
-- More subagent invocations (implementer + reviewer per task)
-- Controller does more prep work (extracting all tasks upfront)
-- Review loops add iterations
-- But catches issues early (cheaper than debugging later)
 
 ## Red Flags
 
-**Never:**
-- Start implementation on main/master branch without explicit user consent
-- Skip task review, or accept a report missing either verdict (spec compliance AND task quality are both required)
-- Proceed with unfixed issues
-- Let an implementer or fix subagent commit, push, or touch git state — they
-  leave work uncommitted; only you commit, after the review passes
-- Commit a task before its review is clean, or before verifying it touched
-  only its own files (no collision with other tasks)
-- Dispatch parallel implementation subagents whose file sets overlap, OR whose
-  work depends on another in-flight task's output (disjoint files but B
-  consumes A's interface/symbol/schema) — concurrent tasks must be both
-  file-disjoint AND independent (use dispatching-parallel-agents)
-- Default to sequential execution without first partitioning tasks into
-  disjoint-file batches in Pre-Flight — "sequential is safe" applied to
-  tasks that could run concurrently silently throws away the speedup. Build
-  the batch plan before Task 1; don't decide parallelism reactively per task
-- Make a subagent read the whole plan file (hand it its task brief —
-  `scripts/task-brief` — instead)
-- Skip scene-setting context (subagent needs to understand where task fits)
-- Ignore subagent questions (answer before letting them proceed)
-- Accept "close enough" on spec compliance (reviewer found spec issues = not done)
-- Skip review loops (reviewer found issues = implementer fixes = review again)
-- Let implementer self-review replace actual review (both are needed)
-- Tell a reviewer what not to flag, or pre-rate a finding's severity in the
-  dispatch prompt ("treat it as Minor at most") — the plan's example code is
-  a starting point, not evidence that its weaknesses were chosen
+Never (each expanded in the section named):
+- Start implementation on main/master without explicit user consent
+- Let an implementer or fix subagent commit, push, or touch git state — only
+  you commit, after review passes ([Committing](#committing))
+- Commit a task before its review is clean, or before verifying no file
+  collision ([Committing](#committing))
+- Skip task review, or accept a report missing either verdict — spec
+  compliance AND task quality are both required; move on with open
+  Critical/Important issues
+- Let implementer self-review replace actual review (both needed)
+- Dispatch parallel subagents that are not BOTH file-disjoint AND independent,
+  or declare a `needs:` edge on a theme instead of a nameable produced/consumed
+  symbol ([Pre-Flight](#pre-flight-plan-review))
+- Default to sequential without running `scripts/plan-batches` — dispatch the
+  batches it computes, don't decide parallelism reactively
+- Tell a reviewer what not to flag or pre-rate a finding's severity
+  ([Constructing Reviewer Prompts](#constructing-reviewer-prompts))
 - Dispatch a task reviewer without a diff file — generate it first
-  (`scripts/review-package BASE HEAD`) and name the printed path in the
-  prompt
-- Move to next task while the review has open Critical/Important issues
-- Re-dispatch a task the progress ledger already marks complete — check
-  the ledger (and `git log`) after any compaction or resume
-
-**If subagent asks questions:**
-- Answer clearly and completely
-- Provide additional context if needed
-- Don't rush them into implementation
-
-**If reviewer finds issues:**
-- Implementer (same subagent) fixes them
-- Reviewer reviews again
-- Repeat until approved
-- Don't skip the re-review
-
-**If subagent fails task:**
-- Dispatch fix subagent with specific instructions
-- Don't try to fix manually (context pollution)
+  (`scripts/review-package BASE AFTER`)
+- Make a subagent read the whole plan file — hand it a `scripts/task-brief`;
+  skip the scene-setting context that says where the task fits
+- Ignore subagent questions — answer before they proceed
+- Re-dispatch a task the ledger already marks complete — check the ledger and
+  `git log` after any compaction ([Durable Progress](#durable-progress))
+- Finish the branch without the whole-branch refactor review after correctness
+  ([Refactor Review](#refactor-review-whole-branch-final-gate))
+- Auto-fix a Refactor-Advisory finding, or a Refactor-Critical one lacking its
+  evidence; or drop the advisory items instead of writing them to
+  `.superpowers/sdd/refactor-report.md`
 
 ## Integration
 

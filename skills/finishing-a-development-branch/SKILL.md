@@ -35,7 +35,24 @@ Cannot proceed with merge/PR until tests pass.
 
 Stop. Don't proceed to Step 2.
 
-**If tests pass:** Continue to Step 2.
+**If tests pass:** Continue to Step 1b.
+
+### Step 1b: Surface Deferred Refactor Items
+
+If subagent-driven-development ran, its whole-branch refactor reviewer may
+have left design-opinion findings for triage:
+
+```bash
+cat "$(git rev-parse --show-toplevel)/.superpowers/sdd/refactor-report.md" 2>/dev/null
+```
+
+If the file exists and is non-empty, present each Refactor-Advisory item to
+your human partner before presenting the completion options, and get a
+decision per item — **fix now** (do it, re-run tests, then continue),
+**ticket** (record it — e.g. a TODO or issue — and note where), or **accept**
+(leave as-is, on the record). Do not merge or open a PR while unaddressed
+advisory items sit unseen; a report nobody reads is a silent discard. If the
+file is absent, this skill was reached by another path — continue.
 
 ### Step 2: Detect Environment
 
