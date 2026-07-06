@@ -1,4 +1,4 @@
-# superpowers-custom
+# superpowers-parallelised
 
 A fork of **[obra/superpowers](https://github.com/obra/superpowers)** (v6.0.3 base),
 packaged as a standalone Claude Code plugin. It is a **drop-in replacement** for the
