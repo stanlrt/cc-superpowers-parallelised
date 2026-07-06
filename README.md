@@ -25,6 +25,8 @@ Everything else tracks upstream. Skills are namespaced `superpowers-custom:` (e.
 
 ```text
 /plugin marketplace add stanlrt/superpowers-custom
+```
+```text
 /plugin install superpowers-custom@superpowers-custom
 ```
 
