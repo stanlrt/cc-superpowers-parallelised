@@ -31,7 +31,7 @@ Everything else tracks upstream. Skills are namespaced `superpowers-custom:` (e.
 ## Install (Claude Code)
 
 ```text
-/plugin marketplace add stanlrt/superpowers-custom
+/plugin marketplace add stanlrt/cc-superpowers-parallelised
 ```
 ```text
 /plugin install superpowers-custom@superpowers-custom
