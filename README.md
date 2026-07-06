@@ -12,6 +12,13 @@ never a duplicate or a conflicting copy of any skill.
   file-collision check. Per-task review uses git **tree snapshots** (`scripts/snapshot` +
   `review-package` reworked to diff tree-ish, with `-- <paths>` to scope one task of a
   parallel batch).
+- **Whole-branch refactor review:** after the final correctness review passes, a separate
+  design-lens pass steps back over the assembled branch for refactor needs the per-task
+  reviews cannot see — dead code (every new symbol grepped for a real consumer), cross-task
+  duplication, messy hardcodes, missing abstractions. Hybrid by severity: mechanical,
+  evidence-backed findings (dead code, exact duplication) auto-fix through the normal fix
+  loop; design-opinion findings are written to a report for you to triage (fix now / ticket
+  / accept) at branch finish — working, tested code is never auto-rewritten on an opinion.
 - **Reduced token usage:** Sonnet implementers for step-based plans; escalate to the
   most-capable "advisor" model only when the **plan itself** is defective.
 - **GitHub centric PR workflow:** PR body built from the repo's PR template and passed
