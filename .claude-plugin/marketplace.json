@@ -8,7 +8,7 @@
     {
       "name": "superpowers-custom",
       "description": "Fork of obra/superpowers (v6.0.3 base + fork revisions) with the no-commit subagent-driven-development model. Drop-in replacement for the official superpowers plugin.",
-      "version": "6.0.4-fork.7",
+      "version": "6.0.4-fork.8",
       "source": "./",
       "author": {
         "name": "stanlrt"
