@@ -218,14 +218,21 @@ Sonnet (`claude-sonnet-4-6`) — the steps carry the design, so implementation
 is execution, not architecture. Do not escalate the implementer to a more
 capable model just because a step looks involved.
 
-**Call the advisor only when the plan itself has an issue.** The "advisor" is
-a one-shot dispatch to the most capable available model, used to resolve a
-defect in the plan — a step that is ambiguous, internally contradictory,
-under-specified, or that an implementer hit as BLOCKED for a design reason
-(not a context reason). Ask the advisor the specific plan question, fold its
-answer back into the plan/brief, then continue on Sonnet. Routine
-implementation never calls the advisor. The final whole-branch review is the
-other most-capable dispatch (see below).
+**Call the plan consultant only when the plan itself has an issue.** The "plan
+consultant" is a one-shot dispatch *you the controller* make to the most
+capable available model, used to resolve a defect in the plan — a step that is
+ambiguous, internally contradictory, under-specified, or that an implementer
+hit as BLOCKED for a design reason (not a context reason). Ask the plan
+consultant the specific plan question, fold its answer back into the
+plan/brief, then continue on Sonnet. Routine implementation never calls the
+plan consultant. The final whole-branch review is the other most-capable
+dispatch (see below).
+
+> **Not the built-in advisor.** The plan consultant is a fork mechanism —
+> your own manual dispatch. It is unrelated to Claude Code's built-in
+> `advisor` feature (`/advisor`, `advisorModel`), which auto-consults a
+> stronger model and which subagents govern by their own rule (see
+> implementer-prompt.md). Do not conflate the two.
 
 Beyond that default, use the least powerful model that can handle each role.
 Pick by what the task actually demands:

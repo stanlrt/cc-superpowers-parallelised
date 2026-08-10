@@ -76,6 +76,13 @@ Subagent (general-purpose):
     Warnings or other noise in the implementer's reported test output are
     findings — test output should be pristine.
 
+    ## Using the Built-in Advisor
+
+    If Claude Code's built-in `advisor` feature is configured, consult it
+    **only when you are genuinely stuck or unsure** about a finding — not for
+    routine judgments you can make on your own. Reviewing is your job; don't
+    burn the advisor model's tokens second-guessing calls you're confident in.
+
     ## Part 1: Spec Compliance
 
     Compare the diff against What Was Requested:

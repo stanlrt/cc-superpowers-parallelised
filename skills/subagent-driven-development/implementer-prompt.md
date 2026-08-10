@@ -51,8 +51,14 @@ Subagent (general-purpose):
     **While you work:** If you encounter something unexpected or unclear, **ask questions**.
     It's always OK to pause and clarify. Don't guess or make assumptions.
 
-    While iterating, run the focused test for what you're changing; run the
-    full suite once before reporting back, not after every edit.
+    **Scope your testing to your change.** Run only the tests that cover the
+    files you changed, plus any tests your change could plausibly break
+    (impacted tests). **Never run the whole-repo test suite, and never lint or
+    typecheck the whole repo** — that is not your job, it wastes the run, and
+    it surfaces noise you did not cause. If you cannot tell which tests cover
+    your files, name that in your report rather than falling back to the full
+    suite. Run the focused test while iterating; run the covering + impacted
+    tests once before reporting back, not after every edit.
 
     ## Code Organization
 
@@ -83,6 +89,18 @@ Subagent (general-purpose):
     specifically what you're stuck on, what you've tried, and what kind of help you need.
     The controller can provide more context, re-dispatch with a more capable model,
     or break the task into smaller pieces.
+
+    ## Using the Built-in Advisor
+
+    If Claude Code's built-in `advisor` feature is configured, consult it
+    **only when you are genuinely stuck or unsure** — a decision with multiple
+    valid approaches you can't choose between, a recurring error you can't
+    resolve, or real doubt about correctness before you report DONE. Do **not**
+    consult the advisor at routine decision points, for straightforward steps,
+    or to double-check work you're already confident in — that burns the
+    advisor model's tokens for no gain. Stuck or unsure: consult. Otherwise:
+    proceed on your own. (This is the built-in advisor tool, not the plan
+    consultant the controller runs.)
 
     ## Before Reporting Back: Self-Review
 

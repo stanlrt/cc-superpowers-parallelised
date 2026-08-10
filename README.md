@@ -20,7 +20,8 @@ never a duplicate or a conflicting copy of any skill.
   loop; design-opinion findings are written to a report for you to triage (fix now / ticket
   / accept) at branch finish — working, tested code is never auto-rewritten on an opinion.
 - **Reduced token usage:** Sonnet implementers for step-based plans; escalate to the
-  most-capable "advisor" model only when the **plan itself** is defective.
+  most-capable **plan consultant** model (renamed from "advisor" to avoid clashing with
+  Claude Code's built-in `advisor` feature) only when the **plan itself** is defective.
 - **GitHub centric PR workflow:** PR body built from the repo's PR template and passed
   via `--body-file`; CI monitoring + Copilot comments + Code-Quality comments resolution.
 - **GitHub centric issue and branching workflow:** Use GH issues to store specs and manage branches.

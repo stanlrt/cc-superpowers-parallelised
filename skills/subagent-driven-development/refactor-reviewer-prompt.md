@@ -137,6 +137,13 @@ Subagent (general-purpose):
     both locations (hardcode vs existing name). A Critical finding without its
     evidence is downgraded to Advisory by the controller, so include it.
 
+    ## Using the Built-in Advisor
+
+    If Claude Code's built-in `advisor` feature is configured, consult it
+    **only when you are genuinely stuck or unsure** about a finding or a
+    bucketing call — not for routine design judgments, which are your job.
+    Don't burn the advisor model's tokens on opinions you can already defend.
+
     ## Output Format
 
     Begin directly with the first section — no preamble, no process narration.
