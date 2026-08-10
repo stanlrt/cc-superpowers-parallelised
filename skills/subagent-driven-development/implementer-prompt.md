@@ -1,6 +1,11 @@
-# Implementer Subagent Prompt Template
+# Implementer Subagent Prompt — Worked Example
 
-Use this template when dispatching an implementer subagent.
+One rendering of the implementer contract (SKILL.md § The implementer
+contract) as a ready-to-adapt dispatch. The rails listed there are
+non-negotiable — keep every one in the dispatch, in whatever words fit. Adapt
+only the per-task parts to the task: whether TDD applies (the brief decides),
+how deep the self-review checklist goes, and code-organization notes. Don't
+paste this whole onto a task it doesn't fit, and never drop a rail.
 
 ```
 Subagent (general-purpose):

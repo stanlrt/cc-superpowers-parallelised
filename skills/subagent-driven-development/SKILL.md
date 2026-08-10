@@ -232,7 +232,7 @@ dispatch (see below).
 > your own manual dispatch. It is unrelated to Claude Code's built-in
 > `advisor` feature (`/advisor`, `advisorModel`), which auto-consults a
 > stronger model and which subagents govern by their own rule (see
-> implementer-prompt.md). Do not conflate the two.
+> [The implementer contract](#the-implementer-contract)). Do not conflate the two.
 
 Beyond that default, use the least powerful model that can handle each role.
 Pick by what the task actually demands:
@@ -332,8 +332,9 @@ final whole-branch review. When you fill a reviewer template:
   branch started from, e.g. `git merge-base main HEAD`) and include the
   printed path in the final review dispatch, so the final reviewer reads
   one file instead of re-deriving the branch diff with git commands.
-- Every fix dispatch carries the implementer contract: the fix subagent
-  re-runs the tests covering its change and reports the results. Name the
+- Every fix dispatch carries the full [implementer contract](#the-implementer-contract);
+  in particular the fix subagent re-runs the tests covering its change and
+  reports the results. Name the
   covering test files in the dispatch — a one-line fix does not need the
   whole suite. Before re-dispatching the reviewer, confirm the fix report
   contains the covering tests, the command run, and the output; dispatch
@@ -369,7 +370,8 @@ the whole codebase (it must, to grep every new symbol for a real consumer).
   duplication (both ranges cited), a hardcode that duplicates an existing named
   constant (both locations cited). Handle these exactly like task-review
   findings — dispatch ONE fix subagent with the complete Critical list, the
-  fix carries the implementer contract (re-run covering tests, report results),
+  fix carries the full [implementer contract](#the-implementer-contract) (in
+  particular, re-run covering tests and report results),
   then re-run the refactor package and re-review the Critical bucket. Commit
   the fixes yourself. A Critical finding that arrives without its evidence is
   downgraded to Advisory — do not auto-fix it.
@@ -388,6 +390,43 @@ judgment, same tier as the final correctness review), and reuse the same
 branch package the final review used (`scripts/review-package MERGE_BASE HEAD`)
 rather than regenerating it.
 
+## The implementer contract
+
+Every implementer dispatch carries the same non-negotiable rails — the rules
+that keep per-task review isolation and correct test scoping intact. Render
+them in whatever words fit the task, but a dispatch that drops one is broken:
+
+- **No git writes.** Never commit, push, stage, or otherwise modify git state
+  — leave your changes uncommitted in the working tree; read-only inspection
+  (`git status`, `git diff`) is fine. The controller that dispatched you
+  reviews each task and does the committing — if you commit, that per-task
+  review isolation breaks.
+- **Own files only.** Touch only the files this task owns; if you must edit a
+  file another task owns, stop and report it.
+- **Scope the testing.** Run only the tests covering the changed files plus
+  plausibly-impacted ones. Never run the whole-repo suite, and never lint or
+  typecheck the whole repo. Can't tell what covers your files? Name that in
+  the report — don't fall back to the full suite.
+- **Ask, don't guess.** Anything unclear, before or during the work — pause
+  and ask. No assumptions.
+- **Escalate with a status, never silent bad work.** Bad work is worse than
+  no work. Stuck or unsure → report BLOCKED / NEEDS_CONTEXT /
+  DONE_WITH_CONCERNS, never a quiet guess.
+- **Report to the file, return the short form.** Write the full report to the
+  report file; return only status, files changed (not committed), a one-line
+  test summary, concerns, and the report-file path — under 15 lines.
+- **Self-review before reporting.** Review the work with fresh eyes and fix
+  what you find before reporting. (The worked example's checklist is a
+  starting depth — adapt it to the task.)
+- **Advisor only when stuck.** If Claude Code's built-in `advisor` feature is
+  configured, consult it only when genuinely stuck or unsure — never at
+  routine steps; it burns the advisor model's tokens for no gain.
+
+The rest is the controller's call per task: whether TDD applies (the plan and
+brief decide that — see writing-plans; the dispatch never mandates it on its
+own) and how much code-organization guidance the task needs. Adapt those; don't
+paste boilerplate that contradicts the brief.
+
 ## File Handoffs
 
 Everything you paste into a dispatch prompt — and everything a subagent
@@ -396,20 +435,21 @@ and is re-read on every later turn. Hand artifacts over as files:
 
 - **Task brief:** before dispatching an implementer, run this skill's
   `scripts/task-brief PLAN_FILE N` — it extracts the task's full text to a
-  uniquely named file and prints the path. Compose the dispatch so the
-  brief stays the single source of requirements. Your dispatch should
-  contain: (1) one line on where this task fits in the project; (2) the
-  brief path, introduced as "read this first — it is your requirements,
-  with the exact values to use verbatim"; (3) interfaces and decisions
-  from earlier tasks that the brief cannot know; (4) your resolution of
-  any ambiguity you noticed in the brief; (5) the report-file path and
-  report contract. Exact values (numbers, magic strings, signatures, test
-  cases) appear only in the brief.
+  uniquely named file and prints the path. Every dispatch is the implementer
+  contract (above — non-negotiable) plus task framing, with the brief as the
+  single source of requirements. The framing, on top of the contract:
+  (1) one line on where this task fits in the project; (2) the brief path,
+  introduced as "read this first — it is your requirements, with the exact
+  values to use verbatim"; (3) interfaces and decisions from earlier tasks
+  that the brief cannot know; (4) your resolution of any ambiguity you
+  noticed in the brief; (5) the report-file path and report format. Exact
+  values (numbers, magic strings, signatures, test cases) appear only in the
+  brief. implementer-prompt.md renders contract + framing as a worked
+  example — adapt it to the task, don't paste it blind.
 - **Report file:** name the implementer's report file after the brief
   (brief `…/task-N-brief.md` → report `…/task-N-report.md`) and put it in
   the dispatch prompt. The implementer writes the full report there and
-  returns only status, files changed (it does not commit), a one-line test
-  summary, and concerns.
+  returns only the short form (see [The implementer contract](#the-implementer-contract)).
 - **Reviewer inputs:** the task reviewer gets three paths — the same brief
   file, the report file, and the review package — plus the global
   constraints that bind the task.
@@ -460,7 +500,7 @@ a ledger file, not only in todos.
 
 ## Prompt Templates
 
-- [implementer-prompt.md](implementer-prompt.md) - Dispatch implementer subagent
+- [implementer-prompt.md](implementer-prompt.md) - Worked example of the implementer contract (see [The implementer contract](#the-implementer-contract)); adapt per task, don't paste blind
 - [task-reviewer-prompt.md](task-reviewer-prompt.md) - Dispatch task reviewer subagent (spec compliance + code quality)
 - Final whole-branch review: use superpowers-custom:requesting-code-review's [code-reviewer.md](../requesting-code-review/code-reviewer.md)
 - [refactor-reviewer-prompt.md](refactor-reviewer-prompt.md) - Dispatch whole-branch refactor reviewer (design lens: dead code, duplication, hardcodes, smells) after the final correctness review is clean
@@ -584,7 +624,7 @@ Never (each expanded in the section named):
 - **superpowers-custom:finishing-a-development-branch** - Complete development after all tasks
 
 **Subagents should use:**
-- **superpowers-custom:test-driven-development** - Subagents follow TDD for each task
+- **superpowers-custom:test-driven-development** - Subagents follow TDD when the task calls for it — the plan and brief decide (see [The implementer contract](#the-implementer-contract))
 
 **Alternative workflow:**
 - **superpowers-custom:executing-plans** - Use for parallel session instead of same-session execution
