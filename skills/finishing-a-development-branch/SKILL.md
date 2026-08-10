@@ -165,7 +165,41 @@ gh pr create --title "<title>" --body-file <path-to-body-file>
 The title must satisfy the repo's PR-title rule (Conventional Commits where
 enforced). After creating, delete the scratch body file.
 
-Then: wait 3 minutes to monitor CI jobs completion (use gh CLI to access results) and Copilot + Code Quality comments. Assess comments for relevance, and fix+resolve them, or answer why they aren't relevant+resolve them. To resolve Copilot comments: gh cli. To resolve Code Quality comments: GH GraphQL API via CLI.
+Then monitor CI to completion. **Do not guess a flat wait** — CI duration
+varies, so a fixed 3-minute sleep either races the run or wastes time. Poll
+the PR's checks on a **30-second interval**, and when they settle, print any
+failures in the same pass — don't re-poll by hand to hunt them down:
+
+```bash
+PR=<pr-number>
+while :; do
+  # bucket is "pending" while a check is queued or running
+  pending=$(gh pr checks "$PR" --json bucket -q '[.[] | select(.bucket == "pending")] | length')
+  [ "$pending" -eq 0 ] && break
+  echo "CI still running ($pending pending) — re-checking in 30s"
+  sleep 30
+done
+
+# Settled. If anything failed, dump its logs right here — no second poll.
+if gh pr checks "$PR"; then
+  echo "CI GREEN"
+else
+  gh pr checks "$PR" --json bucket,link -q '.[] | select(.bucket=="fail") | .link' \
+    | grep -oE '/runs/[0-9]+' | grep -oE '[0-9]+' | sort -u \
+    | while read -r run; do echo "=== failed run $run ==="; gh run view "$run" --log-failed; done
+fi
+```
+
+(If your shell blocks a foreground `sleep`, run the whole block as one
+background command and read its output. Never pipe the status command through
+`tail`/`head` — `$?` then reports the pipe's last stage, masking `gh`'s
+non-zero exit, and you misread a red run as green.) If the block prints
+failures, fix the cause, push, and re-enter it — do not proceed until it
+prints `CI GREEN`.
+
+Once CI is green, assess the Copilot + Code Quality comments. Fix+resolve
+them, or answer why they aren't relevant+resolve them. To resolve Copilot
+comments: gh cli. To resolve Code Quality comments: GH GraphQL API via CLI.
 
 **Do NOT clean up worktree** — user needs it alive to iterate on PR feedback.
 

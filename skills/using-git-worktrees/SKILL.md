@@ -128,13 +128,28 @@ git check-ignore -q .worktrees 2>/dev/null || git check-ignore -q worktrees 2>/d
 
 **Why critical:** Prevents accidentally committing worktree contents to repository.
 
+#### Update the parent branch first (mandatory)
+
+Before creating the worktree, **fetch and fast-forward the parent branch you
+are basing off** (usually `main`). A worktree created from a stale local parent
+starts the new branch behind the real tip; its eventual PR then silently
+reverts every commit that landed on the parent since your last pull, and CI
+rejects it as touching unrelated files.
+
+```bash
+git fetch origin
+git checkout <parent>                 # usually main
+git pull --ff-only origin <parent>
+```
+
 #### Create the Worktree
 
 ```bash
 # Determine path based on chosen location
 path="$LOCATION/$BRANCH_NAME"
 
-git worktree add "$path" -b "$BRANCH_NAME"
+# Base the new branch on the freshly-updated parent tip.
+git worktree add "$path" -b "$BRANCH_NAME" origin/<parent>
 cd "$path"
 ```
 
