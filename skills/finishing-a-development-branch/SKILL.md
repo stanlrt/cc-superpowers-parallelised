@@ -173,13 +173,21 @@ failures in the same pass — don't re-poll by hand to hunt them down:
 ```bash
 PR=<pr-number>
 while :; do
-  # Just after PR creation the checks list is briefly empty; treat "no checks yet"
-  # as not-settled, or the loop falls through before CI even registers. (gh exits
-  # non-zero when no checks exist, so default both counts to 0.)
-  total=$(gh pr checks "$PR" --json bucket -q 'length' 2>/dev/null || echo 0)
-  pending=$(gh pr checks "$PR" --json bucket -q '[.[] | select(.bucket == "pending")] | length' 2>/dev/null || echo 0)
-  [ "${total:-0}" -gt 0 ] && [ "${pending:-0}" -eq 0 ] && break
-  echo "CI not settled yet (${total:-0} checks, ${pending:-0} pending) — re-checking in 30s"
+  # One gh call per iteration. gh exits non-zero both when checks are pending and
+  # when none exist yet, so judge by the output, not the exit code. A real error
+  # (auth/network/rate-limit) yields no counts and prints to stderr — surface it
+  # and keep looping, rather than silently spinning on "0 checks".
+  counts=$(gh pr checks "$PR" --json bucket \
+    -q '"\(length) \([.[] | select(.bucket == "pending")] | length)"' 2>/tmp/gh-checks.err)
+  if [ -z "$counts" ]; then
+    grep -qiE 'no checks|no commit statuses' /tmp/gh-checks.err \
+      && echo "No checks registered yet — re-checking in 30s" \
+      || { echo "gh pr checks failed — re-checking in 30s:" >&2; cat /tmp/gh-checks.err >&2; }
+    sleep 30; continue
+  fi
+  set -- $counts; total=$1; pending=$2
+  [ "$total" -gt 0 ] && [ "$pending" -eq 0 ] && break
+  echo "CI not settled yet ($total checks, $pending pending) — re-checking in 30s"
   sleep 30
 done
 
