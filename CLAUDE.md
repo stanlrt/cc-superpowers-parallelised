@@ -13,10 +13,10 @@ Only three skills carry custom behavior (everything else tracks upstream verbati
   check. Per-task review via git tree snapshots (`scripts/snapshot` + `review-package`
   diffing tree-ish, `-- <paths>` scoping). Disjoint-file parallel subagents run in the
   background. Sonnet implementers; the **plan consultant** (a controller-only
-  dispatch to the most-capable model — renamed from "advisor" to avoid clashing
-  with Claude Code's built-in `advisor` feature) is called only when the plan
-  itself is defective. Subagents govern the built-in advisor by their own
-  stuck/unsure rule in `implementer-prompt.md`.
+  dispatch to the most-capable model) is called only when the plan itself is
+  defective. Subagents consult Claude Code's built-in `advisor` feature only
+  when stuck or unsure, and run tests scoped to their changed + impacted files,
+  never the whole-repo suite/lint (`implementer-prompt.md`).
   Adds a whole-branch **refactor reviewer** (`refactor-reviewer-prompt.md`)
   after the final correctness review — a design lens (dead code via
   consumer-grep, cross-task duplication, messy hardcodes, smells), hybrid by
