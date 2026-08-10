@@ -173,10 +173,13 @@ failures in the same pass — don't re-poll by hand to hunt them down:
 ```bash
 PR=<pr-number>
 while :; do
-  # bucket is "pending" while a check is queued or running
-  pending=$(gh pr checks "$PR" --json bucket -q '[.[] | select(.bucket == "pending")] | length')
-  [ "$pending" -eq 0 ] && break
-  echo "CI still running ($pending pending) — re-checking in 30s"
+  # Just after PR creation the checks list is briefly empty; treat "no checks yet"
+  # as not-settled, or the loop falls through before CI even registers. (gh exits
+  # non-zero when no checks exist, so default both counts to 0.)
+  total=$(gh pr checks "$PR" --json bucket -q 'length' 2>/dev/null || echo 0)
+  pending=$(gh pr checks "$PR" --json bucket -q '[.[] | select(.bucket == "pending")] | length' 2>/dev/null || echo 0)
+  [ "${total:-0}" -gt 0 ] && [ "${pending:-0}" -eq 0 ] && break
+  echo "CI not settled yet (${total:-0} checks, ${pending:-0} pending) — re-checking in 30s"
   sleep 30
 done
 

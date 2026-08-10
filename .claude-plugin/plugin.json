@@ -1,7 +1,7 @@
 {
   "name": "superpowers-custom",
   "description": "Fork of obra/superpowers (v6.0.3 base + fork revisions) with a no-commit subagent-driven-development model, snapshot-based review, dependency-DAG parallel batching, issue->branch worktrees, and a template-driven PR finish flow. Drop-in replacement for the official superpowers plugin.",
-  "version": "6.0.4-fork.2",
+  "version": "6.0.4-fork.3",
   "author": {
     "name": "stanlrt"
   },
