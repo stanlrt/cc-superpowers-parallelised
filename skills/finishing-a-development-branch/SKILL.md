@@ -137,10 +137,22 @@ git branch -d <feature-branch>
 
 #### Option 2: Push and Create PR
 
+**Rebase onto the latest base before pushing.** A branch cut earlier falls
+behind while you work — and any PR that merges in the meantime moves the base.
+CI diffs your branch against the *current* base, so pushing a stale branch
+makes the PR show unrelated files as changed (reverts, phantom scope). Fetch
+and rebase first:
+
 ```bash
-# Push branch
+git fetch origin
+git rebase origin/<base-branch>          # usually main
+# resolve any conflicts, then push
 git push -u origin <feature-branch>
 ```
+
+If the PR then sits open while `<base-branch>` moves again, repeat
+`git fetch origin && git rebase origin/<base-branch>` and re-push with
+`--force-with-lease` before it can merge.
 
 **Build the PR body from the repo's template, then create with `--body-file`.**
 
@@ -177,14 +189,16 @@ while :; do
   # when none exist yet, so judge by the output, not the exit code. A real error
   # (auth/network/rate-limit) yields no counts and prints to stderr — surface it
   # and keep looping, rather than silently spinning on "0 checks".
+  err=$(mktemp)   # private temp; avoids a predictable /tmp path and concurrent clobber
   counts=$(gh pr checks "$PR" --json bucket \
-    -q '"\(length) \([.[] | select(.bucket == "pending")] | length)"' 2>/tmp/gh-checks.err)
+    -q '"\(length) \([.[] | select(.bucket == "pending")] | length)"' 2>"$err")
   if [ -z "$counts" ]; then
-    grep -qiE 'no checks|no commit statuses' /tmp/gh-checks.err \
+    grep -qiE 'no checks|no commit statuses' "$err" \
       && echo "No checks registered yet — re-checking in 30s" \
-      || { echo "gh pr checks failed — re-checking in 30s:" >&2; cat /tmp/gh-checks.err >&2; }
-    sleep 30; continue
+      || { echo "gh pr checks failed — re-checking in 30s:" >&2; cat "$err" >&2; }
+    rm -f "$err"; sleep 30; continue
   fi
+  rm -f "$err"
   total=${counts%% *}; pending=${counts##* }   # portable split (works in bash and zsh)
   [ "$total" -gt 0 ] && [ "$pending" -eq 0 ] && break
   echo "CI not settled yet ($total checks, $pending pending) — re-checking in 30s"
