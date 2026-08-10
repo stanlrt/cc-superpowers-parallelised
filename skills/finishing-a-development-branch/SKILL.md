@@ -185,7 +185,7 @@ while :; do
       || { echo "gh pr checks failed — re-checking in 30s:" >&2; cat /tmp/gh-checks.err >&2; }
     sleep 30; continue
   fi
-  set -- $counts; total=$1; pending=$2
+  total=${counts%% *}; pending=${counts##* }   # portable split (works in bash and zsh)
   [ "$total" -gt 0 ] && [ "$pending" -eq 0 ] && break
   echo "CI not settled yet ($total checks, $pending pending) — re-checking in 30s"
   sleep 30
