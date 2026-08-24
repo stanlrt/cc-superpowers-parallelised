@@ -47,9 +47,6 @@ Everything else tracks upstream. Skills are namespaced `superpowers-custom:` (e.
     4. Disable it
     5. Exit and `/reload-plugins`
 
-Verify: open a new session and check the skill listing shows
-`superpowers-custom:subagent-driven-development` and **not** `superpowers:…`.
-
 > The official and the fork cannot both be enabled — they provide the same skill set under
 > different namespaces. Pick one. To go back, re-enable the official plugin and disable this.
 
