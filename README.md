@@ -41,12 +41,11 @@ Everything else tracks upstream. Skills are namespaced `superpowers-custom:` (e.
   ```
 
 3. **Disable the official superpowers plugin** if you had installed it before:
-
-  1. `/plugin`
-  2. Manage tab
-  3. Press Enter on `superpowers@claude-plugins-official`
-  4. Disable it
-  5. Exit and `/reload-plugins`
+    1. `/plugin`
+    2. Manage tab
+    3. Press Enter on `superpowers@claude-plugins-official`
+    4. Disable it
+    5. Exit and `/reload-plugins`
 
 Verify: open a new session and check the skill listing shows
 `superpowers-custom:subagent-driven-development` and **not** `superpowers:…`.
