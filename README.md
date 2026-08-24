@@ -31,17 +31,22 @@ Everything else tracks upstream. Skills are namespaced `superpowers-custom:` (e.
 
 ## Install (Claude Code)
 
-```text
-/plugin marketplace add stanlrt/cc-superpowers-parallelised
-```
-```text
-/plugin install superpowers-custom@superpowers-custom
-```
+1. 
+  ```text
+  /plugin marketplace add stanlrt/cc-superpowers-parallelised
+  ```
+2. 
+  ```text
+  /plugin install superpowers-custom@superpowers-custom
+  ```
 
-Then **disable the official superpowers plugin** if you had installed it before, so only the custom one is active (otherwise
-both load and the model sees two copies of every skill):
+3. **Disable the official superpowers plugin** if you had installed it before:
 
-- `/plugin` → manage → disable `superpowers@claude-plugins-official`
+  1. `/plugin`
+  2. Manage tab
+  3. Press Enter on `superpowers@claude-plugins-official`
+  4. Disable it
+  5. Exit and `/reload-plugins`
 
 Verify: open a new session and check the skill listing shows
 `superpowers-custom:subagent-driven-development` and **not** `superpowers:…`.
