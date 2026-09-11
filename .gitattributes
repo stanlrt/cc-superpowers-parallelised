@@ -2,6 +2,9 @@
 *.sh text eol=lf
 hooks/session-start text eol=lf
 
+# Extensionless executable scripts (must exec on POSIX; shebang breaks with CRLF)
+skills/subagent-driven-development/scripts/* text eol=lf
+
 # Ensure the polyglot wrapper keeps LF (it's parsed by both cmd and bash)
 *.cmd text eol=lf
 
