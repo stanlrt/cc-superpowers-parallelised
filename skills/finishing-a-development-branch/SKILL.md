@@ -35,7 +35,27 @@ Cannot proceed with merge/PR until tests pass.
 
 Stop. Don't proceed to Step 2.
 
-**If tests pass:** Continue to Step 1b.
+**If tests pass:** Continue to Step 1a.
+
+### Step 1a: Verify Heavy UI Changes in a Live Browser
+
+Run this step only when both conditions hold:
+
+1. The branch adds or changes a page, a component, a layout, or a user
+   interaction. A text-only or single-style tweak does not qualify.
+2. axi is installed: `command -v chrome-devtools-axi` prints a path.
+
+If either condition is false, skip to Step 1b. If axi is missing, say in one
+line that the live-UI check was skipped because axi is not installed.
+
+Otherwise, passing tests are not enough — CI never renders the UI. Use the
+`chrome-devtools-axi` skill (or `chrome-devtools-axi --help`) to load each
+affected view and confirm three things: it **renders**, the **console is
+error-free**, and the **interaction works**. Keep a screenshot or a
+console/DOM dump as the evidence.
+
+**If the live-UI check fails → stop.** Fix it, re-run tests, and repeat this
+step before presenting the completion options.
 
 ### Step 1b: Surface Deferred Refactor Items
 
@@ -46,11 +66,13 @@ have left design-opinion findings for triage:
 cat "$(git rev-parse --show-toplevel)/.superpowers/sdd/refactor-report.md" 2>/dev/null
 ```
 
-If the file exists and is non-empty, present each Refactor-Advisory item to
-your human partner before presenting the completion options, and get a
-decision per item — **fix now** (do it, re-run tests, then continue),
+If the file exists and is non-empty, present each Major Refactor-Advisory
+item to your human partner before presenting the completion options, and get
+a decision per item — **fix now** (do it, re-run tests, then continue),
 **ticket** (record it — e.g. a TODO or issue — and note where), or **accept**
-(leave as-is, on the record). Do not merge or open a PR while unaddressed
+(leave as-is, on the record). List the "Dropped — out of scope" items once,
+without asking for a decision. Local items were already fixed during SDD and
+do not appear here. Do not merge or open a PR while unaddressed
 advisory items sit unseen; a report nobody reads is a silent discard. If the
 file is absent, this skill was reached by another path — continue.
 
@@ -189,7 +211,7 @@ while :; do
   # when none exist yet, so judge by the output, not the exit code. A real error
   # (auth/network/rate-limit) yields no counts and prints to stderr — surface it
   # and keep looping, rather than silently spinning on "0 checks".
-  err=$(mktemp)   # private temp; avoids a predictable /tmp path and concurrent clobber
+  err=$(mktemp "${TMPDIR:-/tmp}/gh-checks.XXXXXX")   # private temp; avoids a predictable /tmp path and concurrent clobber
   counts=$(gh pr checks "$PR" --json bucket \
     -q '"\(length) \([.[] | select(.bucket == "pending")] | length)"' 2>"$err")
   if [ -z "$counts" ]; then

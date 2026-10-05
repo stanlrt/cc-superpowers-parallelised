@@ -1,13 +1,14 @@
 # Refactor Reviewer Prompt Template
 
 Use this template when dispatching the whole-branch **refactor reviewer**
-subagent — the last review before finishing the branch, dispatched right
-after the final correctness code review (../requesting-code-review/code-reviewer.md)
-comes back clean.
+subagent — the last review before finishing the branch, launched in parallel
+with the final correctness code review (../requesting-code-review/code-reviewer.md)
+against one shared package, and re-run on the corrected branch when a
+correctness fix carries refactor-relevant risk.
 
 **Purpose:** Step back from the assembled branch and judge whether the code
-is *well-shaped*, not whether it works. The correctness reviewer already
-judged "does it work / match spec." This reviewer judges "now that it works,
+is *well-shaped*, not whether it works. The correctness reviewer judges
+"does it work / match spec." This reviewer judges "now that it works,
 should it be refactored before merge" — design smells, cross-task
 duplication, messy hardcodes, dead code, missing or leaky abstractions.
 
@@ -36,15 +37,24 @@ codebase, which the per-task reviewer may not.
     re-states a constant / config value / enum already defined elsewhere in
     the branch or codebase. Evidence: the literal's location and the existing
     definition's location.
-- **Refactor-Advisory (design opinion, human triage).** Judgment calls where
-  reasonable engineers differ — "could extract," "this function is becoming a
-  God object," "an abstraction would pay off here," primitive obsession,
-  naming drift, a shape that will bite later. These are NOT auto-fixed. They
-  go into the advisory report file for the human to triage at
-  finishing-a-development-branch — fix now, ticket, or accept.
+- **Refactor-Advisory (design opinion, scoped by blast radius).** Judgment
+  calls where reasonable engineers differ — "could extract," "this function
+  is becoming a God object," "an abstraction would pay off here," primitive
+  obsession, naming drift, a shape that will bite later. Each one carries a
+  **Scope** tag, decided by what the fix would touch:
+  - **Local** — the fix stays inside files this branch changed and changes
+    no exported or public interface. Local items are auto-fixed in the same
+    fix wave as the Critical bucket.
+  - **Major** — the fix changes an exported or public interface, moves code
+    across modules, or edits files this branch did not change. Major items
+    are NOT auto-fixed. They go into the advisory report file for the human
+    to triage at finishing-a-development-branch — fix now, ticket, or accept.
+  - **Out of scope** — the smell is in code this branch did not change.
+    Record it in the report as dropped, with that reason. Do not fix it.
 
-Putting a design opinion in the Critical bucket triggers an unwanted rewrite
-of working, tested code; putting real dead code in the Advisory bucket lets it
+Putting a design opinion in the Critical bucket skips its scope check;
+tagging a cross-module redesign Local triggers an unreviewed rewrite of
+working, tested code; putting real dead code in the Advisory bucket lets it
 merge. Bucket by whether the fix is mechanical and evidence-backed, not by how
 much it bothers you.
 
@@ -55,8 +65,8 @@ Subagent (general-purpose):
          judgment pass, the same tier as the final whole-branch review]
   prompt: |
     You are reviewing an assembled feature branch for refactor needs and
-    opportunities. The branch has already passed correctness review — every
-    task works and matches its spec. Do NOT re-litigate correctness, spec
+    opportunities. Every task already passed its own review, and a separate
+    reviewer owns whole-branch correctness. Do NOT re-litigate correctness, spec
     compliance, or test behavior. Your single question is: now that this
     works, is it well-shaped, or should something be refactored before it
     merges?
@@ -156,13 +166,18 @@ Subagent (general-purpose):
     For each: file:line, what it is (dead code | duplication | hardcode),
     the evidence (grep output / both ranges / both locations), and the fix.
 
-    ### Refactor-Advisory (design opinion — human triage)
-    For each: file:line, the smell, why it will bite, and the refactor you
-    would suggest. Rank most-valuable first.
+    ### Refactor-Advisory (design opinion — scoped)
+    For each: file:line, the smell, why it will bite, the refactor you
+    would suggest, and **Scope: Local | Major | Out of scope** with the
+    files the fix would touch. Local = only files this branch changed and
+    no exported/public interface change. Major = an exported/public
+    interface change, a cross-module move, or edits to files this branch
+    did not change. Out of scope = the smell is in code this branch did not
+    change. Rank most-valuable first.
 
     ### Assessment
-    **Refactor before merge?** [Clean — nothing to do | Critical fixes only |
-    Critical fixes + advisory items worth doing now]
+    **Refactor before merge?** [Clean — nothing to do | Critical + Local
+    fixes | Critical + Local fixes, and Major items for human triage]
     **Reasoning:** [1-2 sentences]
 ```
 
@@ -175,8 +190,9 @@ Subagent (general-purpose):
 - `[BASE_SHA]` — the commit the branch started from (`git merge-base main HEAD`)
 - `[HEAD_SHA]` — branch head (`git rev-parse HEAD`)
 - `[DIFF_FILE]` — REQUIRED: the branch package path
-  (`scripts/review-package MERGE_BASE HEAD` prints it; same package the final
-  correctness review used — reuse it, do not regenerate)
+  (`scripts/review-package MERGE_BASE HEAD` prints it; the same package the
+  parallel correctness review uses — on a re-run, the package regenerated at
+  the new HEAD)
 
 **Reviewer returns:** Well-shaped notes, Refactor-Critical findings (with
 evidence), Refactor-Advisory findings, and a refactor verdict.
@@ -189,9 +205,15 @@ evidence), Refactor-Advisory findings, and a refactor verdict.
    implementer contract: re-run the tests covering the touched code and report
    the results. Then re-run the refactor package and re-review the Critical
    bucket. A Critical finding missing its evidence is treated as Advisory.
-2. **Refactor-Advisory → report file, no auto-fix.** Write the advisory
-   findings to `.superpowers/sdd/refactor-report.md` and carry them into
-   superpowers-custom:finishing-a-development-branch, where the human triages
-   each: fix now, file a ticket, or accept. Do not silently drop them.
+2. **Refactor-Advisory, by Scope.** Spot-check each Scope tag against the
+   files the fix would touch; on doubt, treat the item as Major.
+   - **Local** → add to the same fix-subagent list as the Critical findings,
+     and re-review after the fix.
+   - **Major** → write to `.superpowers/sdd/refactor-report.md` and carry
+     into superpowers-custom:finishing-a-development-branch, where the human
+     triages each: fix now, file a ticket, or accept.
+   - **Out of scope** → write to the same report under "Dropped — out of
+     scope for this branch". Do not fix.
+   Do not silently drop any advisory item.
 3. **Commit** any auto-fixes yourself (subagents never commit), same as any
    other task commit, before moving to finishing the branch.

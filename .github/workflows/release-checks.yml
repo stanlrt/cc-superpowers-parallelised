@@ -1,0 +1,25 @@
+name: Release checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check versions, manifests, namespace, and line endings
+        env:
+          BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+        run: |
+          # A new branch push has an all-zero "before" SHA; skip the bump check then.
+          if [[ "$BASE_REF" =~ ^0+$ ]]; then BASE_REF=""; fi
+          bash scripts/check-release.sh "$BASE_REF"

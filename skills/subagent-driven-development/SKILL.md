@@ -5,7 +5,7 @@ description: Use when executing implementation plans with independent tasks in t
 
 # Subagent-Driven Development
 
-Execute plan by dispatching a fresh implementer subagent per task, a task review (spec compliance + code quality) after each, then two whole-branch passes at the end: a correctness review, then a refactor review (design lens — dead code, cross-task duplication, messy hardcodes, smells).
+Execute plan by dispatching a fresh implementer subagent per task, a task review (spec compliance + code quality) after each, then two whole-branch final passes launched in parallel: a correctness review and a refactor review (design lens — dead code, cross-task duplication, messy hardcodes, smells).
 
 **Why subagents:** You delegate tasks to specialized agents with isolated context. By precisely crafting their instructions and context, you ensure they stay focused and succeed at their task. They should never inherit your session's context or history — you construct exactly what they need. This also preserves your own context for coordination work.
 
@@ -79,11 +79,16 @@ digraph process {
 
     "Read plan, note context and global constraints, create todos" [shape=box];
     "More tasks remain?" [shape=diamond];
-    "Dispatch final code reviewer subagent (../requesting-code-review/code-reviewer.md)" [shape=box];
-    "Dispatch refactor reviewer subagent (./refactor-reviewer-prompt.md)" [shape=box];
-    "Refactor-Critical findings?" [shape=diamond];
+    "Build one branch package; dispatch correctness + refactor reviewers in PARALLEL" [shape=box];
+    "Correctness reviewer (../requesting-code-review/code-reviewer.md)" [shape=box];
+    "Refactor reviewer (./refactor-reviewer-prompt.md)" [shape=box];
+    "Correctness findings (any severity)?" [shape=diamond];
+    "Correctness fix loop (ONE fix subagent, all severities); commit; fixer declares refactor-relevant risk" [shape=box];
+    "Fixes risk duplication / dead code / shared shape, touch a cited file, or unsure?" [shape=diamond];
+    "Regenerate package at new HEAD; re-run refactor reviewer" [shape=box];
+    "Refactor-Critical or Local Advisory findings?" [shape=diamond];
     "Fix loop: dispatch fix subagent, re-review; commit fixes" [shape=box];
-    "Write Refactor-Advisory items to refactor-report.md for human triage" [shape=box];
+    "Write Major / out-of-scope Advisory items to refactor-report.md for human triage" [shape=box];
     "Use superpowers-custom:finishing-a-development-branch" [shape=box style=filled fillcolor=lightgreen];
 
     "Read plan, note context and global constraints, create todos" -> "Dispatch implementer subagent (./implementer-prompt.md)";
@@ -99,13 +104,21 @@ digraph process {
     "Controller verifies no file collision, then commits the task" -> "Mark task complete in todo list and progress ledger";
     "Mark task complete in todo list and progress ledger" -> "More tasks remain?";
     "More tasks remain?" -> "Dispatch implementer subagent (./implementer-prompt.md)" [label="yes"];
-    "More tasks remain?" -> "Dispatch final code reviewer subagent (../requesting-code-review/code-reviewer.md)" [label="no"];
-    "Dispatch final code reviewer subagent (../requesting-code-review/code-reviewer.md)" -> "Dispatch refactor reviewer subagent (./refactor-reviewer-prompt.md)" [label="correctness clean"];
-    "Dispatch refactor reviewer subagent (./refactor-reviewer-prompt.md)" -> "Refactor-Critical findings?";
-    "Refactor-Critical findings?" -> "Fix loop: dispatch fix subagent, re-review; commit fixes" [label="yes"];
-    "Fix loop: dispatch fix subagent, re-review; commit fixes" -> "Refactor-Critical findings?" [label="re-review"];
-    "Refactor-Critical findings?" -> "Write Refactor-Advisory items to refactor-report.md for human triage" [label="none / all fixed"];
-    "Write Refactor-Advisory items to refactor-report.md for human triage" -> "Use superpowers-custom:finishing-a-development-branch";
+    "More tasks remain?" -> "Build one branch package; dispatch correctness + refactor reviewers in PARALLEL" [label="no"];
+    "Build one branch package; dispatch correctness + refactor reviewers in PARALLEL" -> "Correctness reviewer (../requesting-code-review/code-reviewer.md)";
+    "Build one branch package; dispatch correctness + refactor reviewers in PARALLEL" -> "Refactor reviewer (./refactor-reviewer-prompt.md)";
+    "Correctness reviewer (../requesting-code-review/code-reviewer.md)" -> "Correctness findings (any severity)?";
+    "Refactor reviewer (./refactor-reviewer-prompt.md)" -> "Correctness findings (any severity)?";
+    "Correctness findings (any severity)?" -> "Refactor-Critical or Local Advisory findings?" [label="clean - keep parallel refactor result"];
+    "Correctness findings (any severity)?" -> "Correctness fix loop (ONE fix subagent, all severities); commit; fixer declares refactor-relevant risk" [label="findings"];
+    "Correctness fix loop (ONE fix subagent, all severities); commit; fixer declares refactor-relevant risk" -> "Fixes risk duplication / dead code / shared shape, touch a cited file, or unsure?";
+    "Fixes risk duplication / dead code / shared shape, touch a cited file, or unsure?" -> "Refactor-Critical or Local Advisory findings?" [label="no - keep parallel result"];
+    "Fixes risk duplication / dead code / shared shape, touch a cited file, or unsure?" -> "Regenerate package at new HEAD; re-run refactor reviewer" [label="yes / unsure"];
+    "Regenerate package at new HEAD; re-run refactor reviewer" -> "Refactor-Critical or Local Advisory findings?";
+    "Refactor-Critical or Local Advisory findings?" -> "Fix loop: dispatch fix subagent, re-review; commit fixes" [label="yes"];
+    "Fix loop: dispatch fix subagent, re-review; commit fixes" -> "Refactor-Critical or Local Advisory findings?" [label="re-review"];
+    "Refactor-Critical or Local Advisory findings?" -> "Write Major / out-of-scope Advisory items to refactor-report.md for human triage" [label="none / all fixed"];
+    "Write Major / out-of-scope Advisory items to refactor-report.md for human triage" -> "Use superpowers-custom:finishing-a-development-branch";
 }
 ```
 
@@ -318,10 +331,13 @@ final whole-branch review. When you fill a reviewer template:
   later dispatches — a real session's dispatch hit 42k chars of which 99%
   was pasted history. A fresh subagent needs its task, the interfaces it
   touches, and the global constraints. Nothing else.
-- Dispatch fix subagents for Critical and Important findings. Record Minor
-  findings in the progress ledger as you go, and point the final
-  whole-branch review at that list so it can triage which must be fixed
-  before merge. A roll-up nobody reads is a silent discard.
+- Per task, dispatch fix subagents for Critical and Important findings;
+  record Minor findings in the progress ledger as you go. The final
+  whole-branch correctness fix wave clears findings of every severity —
+  Critical, Important, and the accumulated Minor list — before the branch
+  is done. Minor findings are small, concrete, and cited; fixing them makes
+  the PR more correct and is not churn. The ledger is the work list for
+  that final wave, not a roll-up to triage away.
 - A finding labeled plan-mandated — or any finding that conflicts with
   what the plan's text requires — is the human's decision, like any plan
   contradiction: present the finding and the plan text, ask which governs.
@@ -340,14 +356,54 @@ final whole-branch review. When you fill a reviewer template:
   contains the covering tests, the command run, and the output; dispatch
   the re-review once all three are present.
 - If the final whole-branch review returns findings, dispatch ONE fix
-  subagent with the complete findings list — not one fixer per finding.
+  subagent with the complete findings list (every severity, including the
+  Minor findings carried in the ledger) — not one fixer per finding.
   Per-finding fixers each rebuild context and re-run suites; a real
   session's final-review fix wave cost more than all its tasks combined.
+  The fix subagent also answers the re-run gate question (below) in its
+  report.
+
+### Parallel final reviews and the re-run gate
+
+After the last task, build ONE branch package (`scripts/review-package
+MERGE_BASE HEAD`) and dispatch BOTH final reviewers against it at the same
+time, in the background: the correctness reviewer and the refactor reviewer.
+Do not wait for one before you start the other.
+
+- **Correctness comes back clean** (no findings at any severity) → keep the
+  parallel refactor result and go straight to the Refactor-Critical fix
+  loop. The serial wait is saved.
+- **Correctness returns findings** → run the correctness fix loop (ONE fix
+  subagent, the complete list, all severities), commit the fixes, then
+  apply the re-run gate.
+
+**Re-run gate (a refactor-risk judgment, never a line count).** The
+correctness fix subagent answers this question in its report, and cites the
+evidence for any "yes":
+
+> Do these fixes plausibly change a conclusion the parallel refactor pass
+> reached or could have reached? Do they (1) introduce or relocate
+> duplicated code, (2) create or remove dead code, (3) change a shared shape
+> (a signature, an exported symbol, or a shared constant), or (4) touch any
+> file or line range that the parallel refactor findings cited?
+
+Read that declaration and spot-check it against `git diff` of the fix
+commits. Then decide:
+
+- **Any of (1)–(4), or unsure → re-run.** Regenerate the package at the new
+  HEAD, dispatch the refactor reviewer again on the corrected branch, and
+  discard the parallel refactor result.
+- **None, with a stated reason → keep** the parallel refactor result.
+  Clause (4) makes this safe: a fix that touched a flagged region re-runs,
+  so no stale refactor finding is auto-fixed against changed code.
+- **On doubt, re-run.** The latency win never overrides the
+  correctness-before-refactor guarantee.
 
 ## Refactor Review (whole-branch, final gate)
 
-After the final correctness review comes back clean, dispatch one more
-whole-branch pass: the **refactor reviewer** (./refactor-reviewer-prompt.md).
+The **refactor reviewer** (./refactor-reviewer-prompt.md) runs at the end of
+the branch, in parallel with the final correctness review, against the same
+branch package (see [Parallel final reviews and the re-run gate](#parallel-final-reviews-and-the-re-run-gate)).
 It is a different lens from every review before it. The per-task reviewer and
 the final correctness reviewer answer "does it work / match spec." This one
 answers "now that it works, is it well-shaped, or should something be
@@ -375,20 +431,28 @@ the whole codebase (it must, to grep every new symbol for a real consumer).
   then re-run the refactor package and re-review the Critical bucket. Commit
   the fixes yourself. A Critical finding that arrives without its evidence is
   downgraded to Advisory — do not auto-fix it.
-- **Refactor-Advisory (design opinion, human triage).** Judgment calls where
-  engineers reasonably differ — "could extract," a God-function forming,
-  primitive obsession, naming drift, a shape that will bite later. Do NOT
-  auto-fix these — auto-rewriting working, tested code on an opinion is churn.
-  Write them to `.superpowers/sdd/refactor-report.md` and carry them into
-  superpowers-custom:finishing-a-development-branch, where the human triages
-  each: fix now, ticket, or accept. A roll-up nobody reads is a silent discard.
+- **Refactor-Advisory (design opinion, scoped by blast radius).** Judgment
+  calls where engineers reasonably differ — "could extract," a God-function
+  forming, primitive obsession, naming drift, a shape that will bite later.
+  The reviewer tags each with a Scope; spot-check the tag, and on doubt
+  treat the item as Major:
+  - **Local** (fix stays in files this branch changed, no exported/public
+    interface change) → auto-fix in the same ONE fix-subagent wave as the
+    Critical bucket, then re-review.
+  - **Major** (exported/public interface change, cross-module move, or
+    edits to files this branch did not change) → write to
+    `.superpowers/sdd/refactor-report.md` and carry into
+    superpowers-custom:finishing-a-development-branch, where the human
+    triages each: fix now, ticket, or accept.
+  - **Out of scope** (smell in code this branch did not change) → record in
+    the report as dropped, with that reason. Do not fix it.
+  A roll-up nobody reads is a silent discard.
 
 A clean branch with zero findings is a valid, expected result — this reviewer
 does not manufacture refactors, and YAGNI makes a speculative abstraction a
 smell, not a fix. Dispatch it on the most capable available model (design
-judgment, same tier as the final correctness review), and reuse the same
-branch package the final review used (`scripts/review-package MERGE_BASE HEAD`)
-rather than regenerating it.
+judgment, same tier as the final correctness review). The parallel launch
+shares one package; a re-run regenerates it at the new HEAD.
 
 ## The implementer contract
 
@@ -503,7 +567,7 @@ a ledger file, not only in todos.
 - [implementer-prompt.md](implementer-prompt.md) - Worked example of the implementer contract (see [The implementer contract](#the-implementer-contract)); adapt per task, don't paste blind
 - [task-reviewer-prompt.md](task-reviewer-prompt.md) - Dispatch task reviewer subagent (spec compliance + code quality)
 - Final whole-branch review: use superpowers-custom:requesting-code-review's [code-reviewer.md](../requesting-code-review/code-reviewer.md)
-- [refactor-reviewer-prompt.md](refactor-reviewer-prompt.md) - Dispatch whole-branch refactor reviewer (design lens: dead code, duplication, hardcodes, smells) after the final correctness review is clean
+- [refactor-reviewer-prompt.md](refactor-reviewer-prompt.md) - Dispatch whole-branch refactor reviewer (design lens: dead code, duplication, hardcodes, smells), launched in parallel with the final correctness review and re-run on the corrected branch when a correctness fix carries refactor-relevant risk
 
 ## Example Workflow
 
@@ -563,22 +627,26 @@ Task reviewer: Spec ✅. Task quality: Approved.
 ...
 
 [After all tasks]
-[Dispatch final code-reviewer]
+[Build one branch package; dispatch final code-reviewer AND refactor reviewer
+ in parallel against it]
 Final reviewer: All requirements met, ready to merge
 
-[Correctness clean — dispatch refactor reviewer with the same branch package]
+[Correctness clean — keep the parallel refactor result]
 Refactor reviewer:
   Well-shaped: config loader, error types
   Refactor-Critical: parseTimeout() in retry.ts:40 duplicates parseDuration()
     in util.ts:12 (both ranges cited); MAX_RETRIES literal 5 in retry.ts:8
     duplicates existing RETRY_LIMIT in config.ts:20
-  Refactor-Advisory: Task 3's Handler is growing into a God-object — consider
-    splitting transport from routing
-  Refactor before merge? Critical fixes only
+  Refactor-Advisory:
+    - retry.ts and backoff.ts name the same delay "wait" and "pause" —
+      Scope: Local (both files changed by this branch)
+    - Task 3's Handler (exported) is growing into a God-object — consider
+      splitting transport from routing. Scope: Major (exported interface)
+  Refactor before merge? Critical + Local fixes, and Major items for human triage
 
-[Dispatch one fix subagent with both Critical findings; fixer re-runs covering
- tests; re-review Critical bucket → clean; commit fixes]
-[Write the advisory God-object note to .superpowers/sdd/refactor-report.md]
+[Dispatch one fix subagent with both Critical findings and the Local naming
+ item; fixer re-runs covering tests; re-review → clean; commit fixes]
+[Write the Major God-object note to .superpowers/sdd/refactor-report.md]
 
 Done! (carry refactor-report.md into finishing-a-development-branch)
 ```
@@ -609,11 +677,14 @@ Never (each expanded in the section named):
 - Ignore subagent questions — answer before they proceed
 - Re-dispatch a task the ledger already marks complete — check the ledger and
   `git log` after any compaction ([Durable Progress](#durable-progress))
-- Finish the branch without the whole-branch refactor review after correctness
+- Finish the branch without the whole-branch refactor review
   ([Refactor Review](#refactor-review-whole-branch-final-gate))
-- Auto-fix a Refactor-Advisory finding, or a Refactor-Critical one lacking its
-  evidence; or drop the advisory items instead of writing them to
-  `.superpowers/sdd/refactor-report.md`
+- Keep a parallel refactor result after a correctness fix that touched a
+  cited region or risked duplication, dead code, or a shared shape — re-run it
+  ([re-run gate](#parallel-final-reviews-and-the-re-run-gate))
+- Auto-fix a Major or out-of-scope Refactor-Advisory finding, or a
+  Refactor-Critical one lacking its evidence; or drop Major items instead of
+  writing them to `.superpowers/sdd/refactor-report.md`
 
 ## Integration
 

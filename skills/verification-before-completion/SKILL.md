@@ -48,6 +48,7 @@ Skip any step = lying, not verifying
 | Regression test works | Red-green cycle verified | Test passes once |
 | Agent completed | VCS diff shows changes | Agent reports "success" |
 | Requirements met | Line-by-line checklist | Tests passing |
+| Heavy UI change works (axi installed) | Loaded live with `chrome-devtools-axi`: renders, console clean, interaction works | Tests pass, CI green |
 
 ## Red Flags - STOP
 
@@ -98,6 +99,13 @@ Skip any step = lying, not verifying
 ✅ Re-read plan → Create checklist → Verify each → Report gaps or completion
 ❌ "Tests pass, phase complete"
 ```
+
+**Heavy UI change (only when `command -v chrome-devtools-axi` prints a path):**
+```
+✅ [Load the changed view with chrome-devtools-axi] [See: renders, console clean, interaction works] "UI verified live"
+❌ "Tests pass, CI green" (CI never renders the UI — a broken layout, a console error, or a dead handler all pass)
+```
+When axi is not installed, skip this check and say so in the completion report.
 
 **Agent delegation:**
 ```

@@ -1,14 +1,13 @@
 {
-  "name": "superpowers",
-  "displayName": "Superpowers",
+  "name": "superpowers-custom",
+  "displayName": "Superpowers (custom fork)",
   "description": "Core skills library: TDD, debugging, collaboration patterns, and proven techniques",
-  "version": "6.0.3",
+  "version": "6.0.4-fork.10",
   "author": {
-    "name": "Jesse Vincent",
-    "email": "jesse@fsck.com"
+    "name": "stanlrt"
   },
-  "homepage": "https://github.com/obra/superpowers",
-  "repository": "https://github.com/obra/superpowers",
+  "homepage": "https://github.com/stanlrt/cc-superpowers-parallelised",
+  "repository": "https://github.com/stanlrt/cc-superpowers-parallelised",
   "license": "MIT",
   "keywords": [
     "skills",
