@@ -54,6 +54,53 @@ agents' documented install commands but are untested. Cursor, OpenCode, Copilot 
 Droid, and Antigravity are not set up for the fork; use upstream's instructions with this
 repo's URL at your own risk.
 
+## Use it in your team's repo
+
+Commit these files to a project repo so everyone who clones it gets the fork. Both agents
+apply them only after the person trusts the repo folder.
+
+**Claude Code** — `.claude/settings.json`. On trust, Claude Code prompts to install the
+marketplace and plugin. The second `enabledPlugins` entry turns the official plugin off
+for this repo only.
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "superpowers-custom": {
+      "source": { "source": "github", "repo": "stanlrt/cc-superpowers-parallelised" }
+    }
+  },
+  "enabledPlugins": {
+    "superpowers-custom@superpowers-custom": true,
+    "superpowers@claude-plugins-official": false
+  }
+}
+```
+
+**Codex** — `.codex/config.toml`.
+
+```toml
+[marketplaces.superpowers-custom]
+source_type = "git"
+source = "https://github.com/stanlrt/cc-superpowers-parallelised.git"
+
+[plugins."superpowers-custom@superpowers-custom"]
+enabled = true
+```
+
+Codex needs the marketplace downloaded once before the plugin loads. Until then it reports
+`marketplace root does not contain a supported manifest`. Add this to your repo's setup steps:
+
+```bash
+codex plugin marketplace upgrade
+```
+
+Then `codex plugin list` shows `superpowers-custom@superpowers-custom  installed, enabled`.
+Turn off the official Superpowers plugin in `/plugins` if it is installed.
+
+Gemini CLI and Kimi Code have no per-repo plugin config; teammates install by hand with
+the table above.
+
 ## Updating the fork from upstream
 
 ```bash
