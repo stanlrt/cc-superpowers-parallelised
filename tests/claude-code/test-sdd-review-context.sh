@@ -216,6 +216,76 @@ test_review_package() {
     ( cd "$REPO" && git checkout -q -- pkg/sub/AGENTS.md )
 }
 
+# brief_path OUTPUT — the brief path from task-brief's "wrote" line.
+brief_path() {
+    printf '%s\n' "$1" | sed -n 's/^wrote \(.*\): [0-9][0-9]* lines$/\1/p'
+}
+
+test_task_brief() {
+    echo "--- task-brief ---"
+    cat > "$REPO/plan.md" <<'PLAN'
+# Plan
+
+### Task 1: Sub change
+
+**Files:**
+- Modify: `pkg/sub/widget.js:10-20`
+- Test: `pkg/sub/widget.test.js`
+
+Do the sub change.
+
+### Task 2: Root change
+
+**Files:**
+- Modify: `README.md`
+
+Do the root change.
+
+### Task 3: No files
+
+Do something without a Files block.
+
+### Task 4: New directory
+
+**Files:**
+- Create: `pkg/sub/newdir/new.js`
+
+Create it.
+PLAN
+    local out brief
+
+    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan.md 1)"
+    brief="$(brief_path "$out")"
+    assert_contains "$brief" "Do the sub change." "brief keeps the task text"
+    assert_has_line "$brief" "     2  NESTED_RULE: never read a whole collection in one call." "Modify path with a line range gets nested rules"
+    assert_has_line "$brief" "     2  ROOT_RULE: keep functions small." "brief gets root rules"
+    assert_not_contains "$brief" "SIBLING_RULE" "brief excludes unrelated directories"
+    assert_not_contains "$brief" "Do the root change." "brief stops at the next task"
+
+    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan.md 2)"
+    brief="$(brief_path "$out")"
+    assert_contains "$brief" "ROOT_RULE" "root-level file gets root rules"
+    assert_not_contains "$brief" "NESTED_RULE" "root-level file excludes nested rules"
+
+    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan.md 3)"
+    brief="$(brief_path "$out")"
+    assert_not_contains "$brief" "## Instruction files" "no Files block, no section"
+
+    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan.md 4)"
+    brief="$(brief_path "$out")"
+    assert_contains "$brief" "NESTED_RULE" "Create path in a new directory gets ancestor rules"
+
+    mkdir -p "$TEST_ROOT/nogit"
+    cp "$REPO/plan.md" "$TEST_ROOT/nogit/plan.md"
+    if ( cd "$TEST_ROOT/nogit" && GIT_CEILING_DIRECTORIES="$TEST_ROOT" \
+            "$SDD_SCRIPTS/task-brief" plan.md 1 brief.md ) >/dev/null 2>&1 \
+        && ! grep -qF "## Instruction files" "$TEST_ROOT/nogit/brief.md"; then
+        pass "outside a git repo: brief written, no section"
+    else
+        fail "outside a git repo: brief written, no section"
+    fi
+}
+
 main() {
     echo "=== Test: sdd review context ==="
 
@@ -225,6 +295,7 @@ main() {
     make_fixture
     test_instruction_files
     test_review_package
+    test_task_brief
 
     echo ""
     if [[ "$FAILURES" -ne 0 ]]; then

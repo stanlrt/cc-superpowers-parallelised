@@ -3,6 +3,12 @@
 # implementer reads in one call, so the task text never has to be pasted
 # through the controller's context.
 #
+# The brief ends with the instruction files (AGENTS.md / CLAUDE.md) that
+# govern the task's files: every backticked path on a list line of the
+# task's **Files:** block (a trailing :N or :N-M line range is stripped),
+# resolved by the sibling `instruction-files` helper against the working
+# tree. No Files block, no governing file, or no git repo: no section.
+#
 # Usage: task-brief PLAN_FILE TASK_NUMBER [OUTFILE]
 # Default OUTFILE: <repo-root>/.superpowers/sdd/task-<N>-brief.md
 # (per worktree; concurrent runs in the same working tree share it).
@@ -17,10 +23,12 @@ plan=$1
 n=$2
 [ -f "$plan" ] || { echo "no such plan file: $plan" >&2; exit 2; }
 
+scripts=$(cd "$(dirname "$0")" && pwd)
+
 if [ $# -eq 3 ]; then
   out=$3
 else
-  dir=$("$(cd "$(dirname "$0")" && pwd)/sdd-workspace")
+  dir=$("$scripts/sdd-workspace")
   out="$dir/task-${n}-brief.md"
 fi
 
@@ -35,6 +43,32 @@ awk -v n="$n" '
 if [ ! -s "$out" ]; then
   echo "task ${n} not found in ${plan} (no heading matching 'Task ${n}')" >&2
   exit 3
+fi
+
+files=()
+while IFS= read -r f; do
+  files+=("$f")
+done < <(awk '
+  /^\*\*Files:\*\*/ { inblock = 1; next }
+  inblock && /^[ \t]*[-*][ \t]/ {
+    line = $0
+    while (match(line, /`[^`]+`/)) {
+      tok = substr(line, RSTART + 1, RLENGTH - 2)
+      sub(/:[0-9]+(-[0-9]+)?$/, "", tok)
+      print tok
+      line = substr(line, RSTART + RLENGTH)
+    }
+    next
+  }
+  inblock && /^[ \t]*$/ { next }
+  { inblock = 0 }
+' "$out")
+
+if [ ${#files[@]} -gt 0 ] && git rev-parse --show-toplevel >/dev/null 2>&1; then
+  section=$("$scripts/instruction-files" "${files[@]}")
+  if [ -n "$section" ]; then
+    printf '\n%s\n' "$section" >> "$out"
+  fi
 fi
 
 echo "wrote ${out}: $(wc -l < "$out" | tr -d ' ') lines"
