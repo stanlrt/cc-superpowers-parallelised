@@ -286,6 +286,183 @@ PLAN
     fi
 }
 
+# new_repo NAME — an empty repo under TEST_ROOT; prints its physical path.
+new_repo() {
+    git init -q -b main "$TEST_ROOT/$1"
+    ( cd "$TEST_ROOT/$1" && git rev-parse --show-toplevel )
+}
+
+# commit_all REPO MESSAGE
+commit_all() {
+    ( cd "$1" && git add -A && git "${GIT_ID[@]}" commit -qm "$2" )
+}
+
+# exit_code CMD... — run CMD silently, print its exit status.
+exit_code() {
+    local rc=0
+    "$@" >/dev/null 2>&1 || rc=$?
+    echo "$rc"
+}
+
+test_instruction_files_extras() {
+    echo "--- instruction-files: arguments, ordering, symlinks ---"
+    local out rc
+    out="$TEST_ROOT/ife.txt"
+
+    ( cd "$REPO" && "$SDD_SCRIPTS/instruction-files" pkg/other/thing.js pkg/sub/widget.js ) > "$out"
+    local listed
+    listed="$(grep '^- ' "$out" | paste -sd' ' -)"
+    if [[ "$listed" == "- AGENTS.md - pkg/other/AGENTS.md - pkg/sub/AGENTS.md - pkg/sub/CLAUDE.md" ]]; then
+        pass "several PATHs merge, root first then by depth"
+    else
+        fail "several PATHs merge, root first then by depth"; echo "    got: $listed"
+    fi
+
+    ( cd "$REPO" && "$SDD_SCRIPTS/instruction-files" ./pkg/sub/widget.js ) > "$out"
+    assert_has_line "$out" "- pkg/sub/AGENTS.md" "./-prefixed path resolves"
+
+    local snap
+    snap="$(cd "$REPO" && "$SDD_SCRIPTS/snapshot")"
+    ( cd "$REPO" && "$SDD_SCRIPTS/instruction-files" --tree "$snap" pkg/sub/widget.js ) > "$out"
+    assert_contains "$out" "NESTED_RULE" "--tree accepts a snapshot tree SHA"
+
+    rc="$(exit_code bash -c "cd '$REPO' && '$SDD_SCRIPTS/instruction-files' --tree")"
+    [[ "$rc" == 2 ]] && pass "--tree without an argument exits 2" || { fail "--tree without an argument exits 2"; echo "    got: $rc"; }
+    rc="$(exit_code bash -c "cd '$REPO' && '$SDD_SCRIPTS/instruction-files' --tree nosuchref x.js")"
+    [[ "$rc" == 2 ]] && pass "bad TREEISH exits 2" || { fail "bad TREEISH exits 2"; echo "    got: $rc"; }
+    rc="$(exit_code bash -c "cd '$REPO' && '$SDD_SCRIPTS/instruction-files' --trees HEAD x.js")"
+    [[ "$rc" == 2 ]] && pass "unknown flag exits 2" || { fail "unknown flag exits 2"; echo "    got: $rc"; }
+    mkdir -p "$TEST_ROOT/nogit2"
+    rc="$(exit_code bash -c "cd '$TEST_ROOT/nogit2' && GIT_CEILING_DIRECTORIES='$TEST_ROOT' '$SDD_SCRIPTS/instruction-files' x.js")"
+    [[ "$rc" == 2 ]] && pass "outside a git repo exits 2" || { fail "outside a git repo exits 2"; echo "    got: $rc"; }
+
+    local lr
+    lr="$(new_repo linkrepo)"
+    mkdir -p "$lr/sub" "$lr/sub2" "$lr/sp ace"
+    printf 'LINK_RULE: root.\n' > "$lr/AGENTS.md"
+    ln -s AGENTS.md "$lr/CLAUDE.md"
+    printf 'SUB_RULE: sub.\n' > "$lr/sub/AGENTS.md"
+    ln -s ../AGENTS.md "$lr/sub/CLAUDE.md"
+    ln -s ../../missing "$lr/sub2/CLAUDE.md"
+    printf 'SPACE_RULE: spaced.\n' > "$lr/sp ace/AGENTS.md"
+    commit_all "$lr" links
+    ( cd "$lr" && "$SDD_SCRIPTS/instruction-files" sub/x.js ) > "$out"
+    assert_has_line "$out" "### CLAUDE.md — identical to AGENTS.md" "working tree: root symlink deduped"
+    assert_has_line "$out" "### sub/CLAUDE.md — identical to AGENTS.md" "working tree: relative symlink deduped"
+    ( cd "$lr" && "$SDD_SCRIPTS/instruction-files" --tree HEAD sub/x.js ) > "$out"
+    assert_has_line "$out" "### CLAUDE.md — identical to AGENTS.md" "--tree: root symlink deduped"
+    assert_has_line "$out" "### sub/CLAUDE.md — identical to AGENTS.md" "--tree: ../ symlink deduped"
+    ( cd "$lr" && "$SDD_SCRIPTS/instruction-files" --tree HEAD sub2/x.js ) > "$out"
+    assert_has_line "$out" "### sub2/CLAUDE.md — symlink to ../../missing" "--tree: unresolvable symlink named"
+    ( cd "$lr" && "$SDD_SCRIPTS/instruction-files" "sp ace/f.js" ) > "$out"
+    assert_contains "$out" "SPACE_RULE" "working tree: path with a space"
+    ( cd "$lr" && "$SDD_SCRIPTS/instruction-files" --tree HEAD "sp ace/f.js" ) > "$out"
+    assert_contains "$out" "SPACE_RULE" "--tree: path with a space"
+}
+
+test_review_package_extras() {
+    echo "--- review-package: diff config, rename, binary, big file ---"
+    local out pkg rc
+
+    ( cd "$REPO" && git config color.ui always && git config diff.external /bin/echo )
+    out="$(cd "$REPO" && "$SDD_SCRIPTS/review-package" HEAD~1 HEAD)"
+    pkg="$(package_path "$out")"
+    ( cd "$REPO" && git config --unset color.ui && git config --unset diff.external )
+    assert_has_line "$pkg" " } // end renderPanel" "color.ui=always and diff.external do not empty the diff"
+
+    rc="$(exit_code bash -c "cd '$REPO' && SDD_CONTEXT_CAP=0 '$SDD_SCRIPTS/review-package' HEAD~1 HEAD")"
+    [[ "$rc" == 2 ]] && pass "SDD_CONTEXT_CAP=0 rejected" || { fail "SDD_CONTEXT_CAP=0 rejected"; echo "    got: $rc"; }
+
+    local rr
+    rr="$(new_repo rr)"
+    seq 1 30 | sed 's/^/line /' > "$rr/old.txt"
+    printf '\000\001\002' > "$rr/bin.dat"
+    mkdir -p "$rr/dir b"
+    { echo 'function oldLong() {'; filler 60 rl; echo '  let mark = 0;'; filler 60 rm; echo '}'; } > "$rr/old long.js"
+    commit_all "$rr" r1
+    ( cd "$rr" && git mv old.txt new.txt && sed -i.bak 's/^line 5$/line five/' new.txt && rm -f new.txt.bak \
+        && printf '\000\001\003' > bin.dat \
+        && git mv "old long.js" "dir b/new long.js" && sed -i.bak 's/  let mark = 0;/  let mark = 1;/' "dir b/new long.js" && rm -f "dir b/new long.js.bak" )
+    commit_all "$rr" r2
+    out="$(cd "$rr" && SDD_CONTEXT_CAP=45 "$SDD_SCRIPTS/review-package" HEAD~1 HEAD)"
+    pkg="$(package_path "$out")"
+    assert_has_line "$pkg" "rename to new.txt" "rename shown"
+    assert_contains "$pkg" "Binary files" "binary change shown"
+    assert_has_line "$pkg" "# context capped: dir b/new long.js (function context over 45 lines; -U10 shown)" "capped path with a space and ' b/' extracted whole"
+    assert_has_line "$pkg" "# Context capped (-U10 shown): dir b/new long.js" "header lists that capped path"
+
+    local big
+    big="$(new_repo big)"
+    { echo 'function huge() {'; filler 20000 hg; echo '  let target = 0;'; echo '}'; } > "$big/huge.js"
+    commit_all "$big" b1
+    sed -i.bak 's/  let target = 0;/  let target = 1;/' "$big/huge.js" && rm -f "$big/huge.js.bak"
+    commit_all "$big" b2
+    out="$(cd "$big" && "$SDD_SCRIPTS/review-package" HEAD~1 HEAD)"
+    pkg="$(package_path "$out")"
+    assert_contains "$pkg" "# context capped: huge.js" "20k-line function file: package produced, capped"
+    assert_contains "$pkg" "+  let target = 1;" "20k-line function file: change present"
+}
+
+test_snapshot_filemode() {
+    echo "--- snapshot: core.fileMode=false ---"
+    local fm out pkg before after
+    fm="$(new_repo fm)"
+    printf '#!/bin/sh\necho hi\n' > "$fm/run.sh"
+    chmod +x "$fm/run.sh"
+    printf 'a\n' > "$fm/other.txt"
+    commit_all "$fm" f1
+    ( cd "$fm" && git config core.fileMode false )
+    printf 'b\n' >> "$fm/other.txt"
+    before="$(cd "$fm" && git rev-parse 'HEAD^{tree}')"
+    after="$(cd "$fm" && "$SDD_SCRIPTS/snapshot")"
+    out="$(cd "$fm" && "$SDD_SCRIPTS/review-package" "$before" "$after")"
+    pkg="$(package_path "$out")"
+    assert_contains "$pkg" "+b" "unrelated change present"
+    assert_not_contains "$pkg" "old mode" "no bogus mode change under core.fileMode=false"
+}
+
+test_task_brief_extras() {
+    echo "--- task-brief: Files block parsing ---"
+    cat > "$REPO/plan2.md" <<'PLAN'
+# Plan
+
+### Task 1: Prose bullet after the block
+
+**Files:**
+- Modify: `README.md`
+
+- A prose bullet mentioning `pkg/sub/widget.js` in passing.
+
+### Task 2: Fenced example
+
+Example of the format:
+
+```
+**Files:**
+- Modify: `pkg/sub/widget.js`
+```
+
+Nothing real here.
+
+### Task 3: Non-path token
+
+**Files:**
+- Modify: `README.md` and call `renderPanel()`
+PLAN
+    local out brief
+    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan2.md 1)"
+    brief="$(brief_path "$out")"
+    assert_contains "$brief" "ROOT_RULE" "block item parsed"
+    assert_not_contains "$brief" "NESTED_RULE" "prose bullet after a blank line not parsed"
+    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan2.md 2)"
+    brief="$(brief_path "$out")"
+    assert_not_contains "$brief" "## Instruction files" "fenced Files example ignored"
+    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan2.md 3)"
+    brief="$(brief_path "$out")"
+    assert_contains "$brief" "ROOT_RULE" "real path still resolved beside a non-path token"
+    assert_not_contains "$brief" "NESTED_RULE" "backticked non-path token pulls in no nested rules"
+}
+
 main() {
     echo "=== Test: sdd review context ==="
 
@@ -296,6 +473,10 @@ main() {
     test_instruction_files
     test_review_package
     test_task_brief
+    test_instruction_files_extras
+    test_review_package_extras
+    test_snapshot_filemode
+    test_task_brief_extras
 
     echo ""
     if [[ "$FAILURES" -ne 0 ]]; then

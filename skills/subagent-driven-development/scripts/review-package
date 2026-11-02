@@ -78,41 +78,65 @@ out="$dir/${name}.diff"
 tmp=$(mktemp -d "$dir/review-package.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
+# Every diff call pins the output format: no colour, no external diff driver,
+# and a/ b/ prefixes, so a user's git config cannot change what is parsed.
+range=("$base" "$head")
+if [ ${#paths[@]} -gt 0 ]; then
+  range+=(-- "${paths[@]}")
+fi
+gitdiff=(git diff --no-color --no-ext-diff)
+ctx=10
+
 changed=()
-while IFS= read -r f; do
+while IFS= read -r -d '' f; do
   changed+=("$f")
-done < <(git diff --name-only "$base" "$head" ${paths[@]:+-- "${paths[@]}"})
+done < <("${gitdiff[@]}" --name-only -z "${range[@]}")
+# One path per chunk, in the order git lists the chunks.
+for f in ${changed[@]+"${changed[@]}"}; do printf '%s\n' "$f"; done > "$tmp/names"
 
 "$scripts/instruction-files" --tree "$head" ${changed[@]+"${changed[@]}"} > "$tmp/instr"
 
-git diff --function-context -U10 "$base" "$head" ${paths[@]:+-- "${paths[@]}"} > "$tmp/wide"
-git diff -U10 "$base" "$head" ${paths[@]:+-- "${paths[@]}"} > "$tmp/plain"
+diffargs=(--src-prefix=a/ --dst-prefix=b/)
+"${gitdiff[@]}" "${diffargs[@]}" --function-context -U"$ctx" "${range[@]}" > "$tmp/wide"
+"${gitdiff[@]}" "${diffargs[@]}" -U"$ctx" "${range[@]}" > "$tmp/plain"
 
 # Both diffs cover the same range and pathspec, so they list the same files
-# in the same order. Pair them file by file and keep the function-context
-# chunk unless it is over the cap and the -U10 chunk is smaller (a new or
-# fully rewritten file has equal chunks and keeps its full text).
+# in the same order, and so does the name list. Pair them file by file and
+# keep the function-context chunk unless it is over the cap and the plain
+# chunk is smaller (a new or fully rewritten file has equal chunks and keeps
+# its full text). Each chunk streams to its own file so a large file costs
+# time linear in its size; awk keeps only line counts.
 : > "$tmp/capped"
-awk -v cap="$cap" -v capped="$tmp/capped" '
-  FNR == 1 { src++ }
-  /^diff --git / { n[src]++ }
-  n[src] { text[src, n[src]] = text[src, n[src]] $0 "\n"; len[src, n[src]]++ }
+awk -v cap="$cap" -v ctx="$ctx" -v capped="$tmp/capped" -v names="$tmp/names" \
+    -v wide="$tmp/wide" -v dir="$tmp" '
+  BEGIN { while ((getline line < names) > 0) name[++nn] = line }
+  FNR == 1 { if (cur != "") close(cur); cur = ""; src = (FILENAME == wide) ? 1 : 2 }
+  /^diff --git / {
+    if (cur != "") close(cur)
+    n[src]++
+    cur = dir "/chunk." src "." n[src]
+  }
+  cur != "" { print > cur; len[src, n[src]]++ }
   END {
+    if (cur != "") close(cur)
     for (i = 1; i <= n[1]; i++) {
+      pick = 1
       if (len[1, i] > cap && len[2, i] < len[1, i]) {
-        hdr = text[2, i]
-        sub(/\n.*/, "", hdr)
-        path = hdr
-        sub(/^diff --git a\/.* b\//, "", path)
-        printf "# context capped: %s (function context over %d lines; -U10 shown)\n", path, cap
-        printf "%s", text[2, i]
-        print path > capped
-      } else {
-        printf "%s", text[1, i]
+        pick = 2
+        printf "# context capped: %s (function context over %d lines; -U%d shown)\n", name[i], cap, ctx
+        print name[i] > capped
       }
+      f = dir "/chunk." pick "." i
+      while ((getline line < f) > 0) print line
+      close(f)
     }
   }
 ' "$tmp/wide" "$tmp/plain" > "$tmp/diff"
+
+if [ -s "$tmp/wide" ] && [ ! -s "$tmp/diff" ]; then
+  echo "review-package: the diff is non-empty but no file chunk could be read from it" >&2
+  exit 1
+fi
 
 {
   echo "# Review package: ${base}..${head}"
@@ -122,11 +146,11 @@ awk -v cap="$cap" -v capped="$tmp/capped" '
   echo "# (no-commit model: changes are uncommitted in the working tree)"
   echo "# Context: each hunk shows its whole enclosing function (cap: ${cap} lines per file)"
   if [ -s "$tmp/capped" ]; then
-    echo "# Context capped (-U10 shown): $(paste -sd' ' "$tmp/capped")"
+    echo "# Context capped (-U${ctx} shown): $(paste -sd' ' "$tmp/capped")"
   fi
   echo
   echo "## Files changed"
-  git diff --stat "$base" "$head" ${paths[@]:+-- "${paths[@]}"}
+  "${gitdiff[@]}" --stat "${range[@]}"
   echo
   if [ -s "$tmp/instr" ]; then
     cat "$tmp/instr"

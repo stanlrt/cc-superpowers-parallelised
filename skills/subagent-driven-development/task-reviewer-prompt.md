@@ -43,7 +43,10 @@ Subagent (general-purpose):
     changed file separately unless a hunk you must judge is cut off — and
     say so in your report. Do not re-run git commands.
     If the diff file is missing, fetch the diff yourself:
-    `git diff --stat [BASE_SHA] [HEAD_SHA]` and `git diff [BASE_SHA] [HEAD_SHA]`.
+    `git diff --no-color --no-ext-diff --stat [BASE_SHA] [HEAD_SHA]` and
+    `git diff --no-color --no-ext-diff --function-context [BASE_SHA] [HEAD_SHA]`,
+    and read every AGENTS.md / CLAUDE.md from the repo root down to each
+    changed file's directory.
     Do not crawl the broader codebase. Inspect code outside the diff only
     to evaluate a concrete risk you can name — one focused check per named
     risk, and name both the risk and what you checked in your report.
@@ -205,7 +208,8 @@ Subagent (general-purpose):
 - `[HEAD_SHA]` — tree-ish after this task (`scripts/snapshot` output)
 - `[DIFF_FILE]` — REQUIRED: the path the controller wrote the review
   package to (`scripts/review-package BASE HEAD` prints the unique path it
-  wrote; the package never enters the controller's context). It carries the governing instruction files and each hunk's enclosing function.
+  wrote; the package never enters the controller's context). It carries the
+  governing instruction files and each hunk's enclosing function.
 
 **Reviewer returns:** Spec Compliance verdict (✅/❌/⚠️), Strengths, Issues
 (Critical/Important/Minor), Task quality verdict

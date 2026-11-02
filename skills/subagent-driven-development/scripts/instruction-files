@@ -29,14 +29,23 @@ usage() {
 }
 
 tree=""
-if [ "${1:-}" = "--tree" ]; then
-  [ $# -ge 2 ] || usage
-  tree=$2
-  shift 2
+case "${1:-}" in
+  --tree)
+    [ $# -ge 2 ] || usage
+    tree=$2
+    shift 2
+    ;;
+  -*) usage ;;
+esac
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "not inside a git repository" >&2; exit 2; }
+if [ -n "$tree" ]; then
   git rev-parse --verify --quiet "${tree}^{tree}" >/dev/null || { echo "bad TREEISH: $tree" >&2; exit 2; }
 fi
+cd "$root"
 
-cd "$(git rev-parse --show-toplevel)"
+# Instruction file names, checked in every directory.
+names="AGENTS.md CLAUDE.md"
 
 # is_file PATH — true when PATH is a regular file in the source.
 is_file() {
@@ -47,10 +56,53 @@ is_file() {
   fi
 }
 
+# join_path DIR TARGET — DIR/TARGET with ./ and ../ folded away. Fails when
+# TARGET is absolute or climbs above the repo root.
+join_path() {
+  local parts part out
+  out=()
+  case $2 in /*) return 1 ;; esac
+  IFS=/ read -r -a parts <<< "$1/$2"
+  for part in "${parts[@]}"; do
+    case $part in
+      ''|.) ;;
+      ..)
+        [ ${#out[@]} -gt 0 ] || return 1
+        unset "out[$((${#out[@]} - 1))]"
+        ;;
+      *) out+=("$part") ;;
+    esac
+  done
+  [ ${#out[@]} -gt 0 ] || return 1
+  (IFS=/; printf '%s\n' "${out[*]}")
+}
+
+# tree_blob PATH — blob SHA of PATH in the tree, following symlink entries
+# (mode 120000) to the blob they name, as a working-tree read would. Fails
+# when PATH is not in the tree or the link does not resolve to a blob.
+tree_blob() {
+  local p=$1 hops=0 mode type sha target
+  while [ "$hops" -lt 10 ]; do
+    read -r mode type sha _ < <(git ls-tree "$tree" -- "$p") || return 1
+    [ -n "${sha:-}" ] || return 1
+    if [ "$mode" = 120000 ]; then
+      target=$(git cat-file blob "$sha")
+      p=$(join_path "$(dirname -- "$p")" "$target") || return 1
+      hops=$((hops + 1))
+    elif [ "$type" = blob ]; then
+      printf '%s\n' "$sha"
+      return 0
+    else
+      return 1
+    fi
+  done
+  return 1
+}
+
 # show PATH — print PATH's content from the source.
 show() {
   if [ -n "$tree" ]; then
-    git cat-file blob "${tree}:$1"
+    git cat-file blob "$(tree_blob "$1")"
   else
     cat -- "$1"
   fi
@@ -59,7 +111,7 @@ show() {
 # blob_id PATH — git blob SHA of PATH's content; equal SHAs mean equal bytes.
 blob_id() {
   if [ -n "$tree" ]; then
-    git rev-parse "${tree}:$1"
+    tree_blob "$1"
   else
     git hash-object -- "$1"
   fi
@@ -68,18 +120,18 @@ blob_id() {
 # candidates PATH... — AGENTS.md and CLAUDE.md in the root and in every
 # directory on the way down to each PATH's directory, one per line.
 candidates() {
-  local p d acc part
+  local p d acc part name
   local parts
   for p in "$@"; do
     p=${p#./}
-    printf '%s\n' AGENTS.md CLAUDE.md
+    for name in $names; do printf '%s\n' "$name"; done
     d=$(dirname -- "$p")
     [ "$d" = . ] && continue
     acc=""
     IFS=/ read -r -a parts <<< "$d"
     for part in "${parts[@]}"; do
       acc=${acc:+$acc/}$part
-      printf '%s\n' "$acc/AGENTS.md" "$acc/CLAUDE.md"
+      for name in $names; do printf '%s\n' "$acc/$name"; done
     done
   done
 }
@@ -108,7 +160,11 @@ done
 seen_ids=()
 seen_paths=()
 for f in "${found[@]}"; do
-  id=$(blob_id "$f")
+  if ! id=$(blob_id "$f"); then
+    echo
+    echo "### $f — symlink to $(git cat-file blob "${tree}:$f")"
+    continue
+  fi
   dup=""
   i=0
   while [ "$i" -lt "${#seen_ids[@]}" ]; do

@@ -7,7 +7,9 @@
 # govern the task's files: every backticked path on a list line of the
 # task's **Files:** block (a trailing :N or :N-M line range is stripped),
 # resolved by the sibling `instruction-files` helper against the working
-# tree. No Files block, no governing file, or no git repo: no section.
+# tree. The block ends at the first blank line after a list item, and a
+# **Files:** inside a code fence is ignored. No Files block, no governing
+# file, or no git repo: no section.
 #
 # Usage: task-brief PLAN_FILE TASK_NUMBER [OUTFILE]
 # Default OUTFILE: <repo-root>/.superpowers/sdd/task-<N>-brief.md
@@ -49,8 +51,11 @@ files=()
 while IFS= read -r f; do
   files+=("$f")
 done < <(awk '
-  /^\*\*Files:\*\*/ { inblock = 1; next }
+  /^[ \t]*```/ { infence = !infence; inblock = 0; next }
+  infence { next }
+  /^\*\*Files:\*\*/ { inblock = 1; seen = 0; next }
   inblock && /^[ \t]*[-*][ \t]/ {
+    seen = 1
     line = $0
     while (match(line, /`[^`]+`/)) {
       tok = substr(line, RSTART + 1, RLENGTH - 2)
@@ -60,7 +65,7 @@ done < <(awk '
     }
     next
   }
-  inblock && /^[ \t]*$/ { next }
+  inblock && /^[ \t]*$/ { if (seen) inblock = 0; next }
   { inblock = 0 }
 ' "$out")
 

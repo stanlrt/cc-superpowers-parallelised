@@ -91,12 +91,16 @@ Subagent (general-purpose):
     Read the diff file once — it is a stat summary plus the full branch diff
     with context, and it is the set of changes you are judging. If it is
     missing, regenerate it yourself:
-    `git diff --stat [BASE_SHA]..[HEAD_SHA]` and `git diff [BASE_SHA]..[HEAD_SHA]`.
+    `git diff --no-color --no-ext-diff --stat [BASE_SHA]..[HEAD_SHA]` and
+    `git diff --no-color --no-ext-diff --function-context [BASE_SHA]..[HEAD_SHA]`,
+    and read every AGENTS.md / CLAUDE.md from the repo root down to each
+    changed file's directory.
 
     The diff file's "Instruction files (binding)" section holds every
     AGENTS.md / CLAUDE.md that governs the changed files, with line numbers.
-    A branch change that breaks one of their rules is Refactor-Critical: the
-    cited rule (path:line) is the evidence.
+    Those rules are binding: do not propose a refactor that breaks one. A rule
+    the branch already breaks is the correctness reviewer's finding; do not
+    file it as Refactor-Critical.
 
     ## You MAY read the whole codebase — that is the point
 

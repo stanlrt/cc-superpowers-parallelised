@@ -32,8 +32,8 @@ Subagent (general-purpose):
     no diff file was given, fetch the diff yourself:
 
     ```bash
-    git diff --stat [BASE_SHA]..[HEAD_SHA]
-    git diff --function-context [BASE_SHA]..[HEAD_SHA]
+    git diff --no-color --no-ext-diff --stat [BASE_SHA]..[HEAD_SHA]
+    git diff --no-color --no-ext-diff --function-context [BASE_SHA]..[HEAD_SHA]
     ```
 
     and read every AGENTS.md / CLAUDE.md from the repo root down to each
