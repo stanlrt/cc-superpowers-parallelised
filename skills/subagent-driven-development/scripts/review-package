@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Generate a review package: a stat summary and the net diff with extended
-# context, written to a file the reviewer reads in one call.
+# Generate a review package: a stat summary, the instruction files that
+# govern the changed files, and the net diff with each hunk widened to its
+# enclosing function, written to a file the reviewer reads in one call.
 #
 # This fork runs the no-commit model: implementer subagents leave their work
 # in the working tree and the controller commits after review. BASE and HEAD
@@ -8,6 +9,18 @@
 # not commits — though plain commits still work, since `git diff A B` accepts
 # either. There is no commit list to show because the task is not yet
 # committed.
+#
+# Instruction files: every AGENTS.md / CLAUDE.md from the repo root down to
+# each changed file's directory, read from HEAD (the tree under review, not
+# the working tree, which in a parallel batch holds other tasks' edits), via
+# the sibling `instruction-files` helper.
+#
+# Context: each file's diff uses `git diff --function-context`, so a hunk
+# shows its whole enclosing function as git's funcname rule (or the repo's
+# .gitattributes diff driver) finds it. When a file's function-context diff
+# is over the cap and its -U10 diff is smaller, the package shows the -U10
+# diff for that file, marked with a "# context capped:" line.
+# Cap: SDD_CONTEXT_CAP lines per file (default 400).
 #
 # Usage: review-package BASE HEAD [-- PATHSPEC...]
 #   BASE        tree-ish before the task (e.g. HEAD^{tree}, or a snapshot SHA)
@@ -43,10 +56,16 @@ if [ $# -gt 0 ]; then
   fi
 fi
 
+cap=${SDD_CONTEXT_CAP:-400}
+case $cap in
+  ''|*[!0-9]*|0) echo "SDD_CONTEXT_CAP must be a positive integer: $cap" >&2; exit 2 ;;
+esac
+
 git rev-parse --verify --quiet "$base^{tree}" >/dev/null 2>&1 || git rev-parse --verify --quiet "$base" >/dev/null || { echo "bad BASE: $base" >&2; exit 2; }
 git rev-parse --verify --quiet "$head^{tree}" >/dev/null 2>&1 || git rev-parse --verify --quiet "$head" >/dev/null || { echo "bad HEAD: $head" >&2; exit 2; }
 
-dir=$("$(cd "$(dirname "$0")" && pwd)/sdd-workspace")
+scripts=$(cd "$(dirname "$0")" && pwd)
+dir=$("$scripts/sdd-workspace")
 name="review-$(git rev-parse --short "$base")..$(git rev-parse --short "$head")"
 if [ ${#paths[@]} -gt 0 ]; then
   # Keep the file unique when several per-task reviews share one BASE..HEAD
@@ -56,19 +75,65 @@ if [ ${#paths[@]} -gt 0 ]; then
 fi
 out="$dir/${name}.diff"
 
+tmp=$(mktemp -d "$dir/review-package.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+
+changed=()
+while IFS= read -r f; do
+  changed+=("$f")
+done < <(git diff --name-only "$base" "$head" ${paths[@]:+-- "${paths[@]}"})
+
+"$scripts/instruction-files" --tree "$head" ${changed[@]+"${changed[@]}"} > "$tmp/instr"
+
+git diff --function-context -U10 "$base" "$head" ${paths[@]:+-- "${paths[@]}"} > "$tmp/wide"
+git diff -U10 "$base" "$head" ${paths[@]:+-- "${paths[@]}"} > "$tmp/plain"
+
+# Both diffs cover the same range and pathspec, so they list the same files
+# in the same order. Pair them file by file and keep the function-context
+# chunk unless it is over the cap and the -U10 chunk is smaller (a new or
+# fully rewritten file has equal chunks and keeps its full text).
+: > "$tmp/capped"
+awk -v cap="$cap" -v capped="$tmp/capped" '
+  FNR == 1 { src++ }
+  /^diff --git / { n[src]++ }
+  n[src] { text[src, n[src]] = text[src, n[src]] $0 "\n"; len[src, n[src]]++ }
+  END {
+    for (i = 1; i <= n[1]; i++) {
+      if (len[1, i] > cap && len[2, i] < len[1, i]) {
+        hdr = text[2, i]
+        sub(/\n.*/, "", hdr)
+        path = hdr
+        sub(/^diff --git a\/.* b\//, "", path)
+        printf "# context capped: %s (function context over %d lines; -U10 shown)\n", path, cap
+        printf "%s", text[2, i]
+        print path > capped
+      } else {
+        printf "%s", text[1, i]
+      }
+    }
+  }
+' "$tmp/wide" "$tmp/plain" > "$tmp/diff"
+
 {
   echo "# Review package: ${base}..${head}"
   if [ ${#paths[@]} -gt 0 ]; then
     echo "# Scoped to: ${paths[*]}"
   fi
   echo "# (no-commit model: changes are uncommitted in the working tree)"
+  echo "# Context: each hunk shows its whole enclosing function (cap: ${cap} lines per file)"
+  if [ -s "$tmp/capped" ]; then
+    echo "# Context capped (-U10 shown): $(paste -sd' ' "$tmp/capped")"
+  fi
   echo
   echo "## Files changed"
   git diff --stat "$base" "$head" ${paths[@]:+-- "${paths[@]}"}
   echo
+  if [ -s "$tmp/instr" ]; then
+    cat "$tmp/instr"
+    echo
+  fi
   echo "## Diff"
-  git diff -U10 "$base" "$head" ${paths[@]:+-- "${paths[@]}"}
+  cat "$tmp/diff"
 } > "$out"
 
-files=$(git diff --name-only "$base" "$head" ${paths[@]:+-- "${paths[@]}"} | wc -l | tr -d ' ')
-echo "wrote ${out}: ${files} file(s) changed, $(wc -c < "$out" | tr -d ' ') bytes"
+echo "wrote ${out}: ${#changed[@]} file(s) changed, $(wc -c < "$out" | tr -d ' ') bytes"

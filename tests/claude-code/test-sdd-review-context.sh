@@ -140,6 +140,82 @@ test_instruction_files() {
     fi
 }
 
+# make_change — commit c2: one-line edits deep inside widget.js and long.js,
+# an edit in pkg/other, and a new 60-line file.
+make_change() {
+    ( cd "$REPO" \
+        && sed -i.bak 's/    let count = 0;/    let count = items.length;/' pkg/sub/widget.js \
+        && sed -i.bak 's/  let seed = 0;/  let seed = 1;/' pkg/sub/long.js \
+        && rm -f pkg/sub/*.bak \
+        && printf 'export const other = 2;\n' > pkg/other/thing.js \
+        && { echo 'function fresh() {'; filler 60 fresh; echo '}'; } > pkg/sub/fresh.js \
+        && git add -A && git "${GIT_ID[@]}" commit -qm c2 )
+}
+
+# package_path OUTPUT — the package path from review-package's "wrote" line.
+package_path() {
+    printf '%s\n' "$1" | sed -n 's/^wrote \(.*\): [0-9].*$/\1/p'
+}
+
+test_review_package() {
+    echo "--- review-package ---"
+    make_change
+    local out pkg
+
+    out="$(cd "$REPO" && "$SDD_SCRIPTS/review-package" HEAD~1 HEAD)"
+    pkg="$(package_path "$out")"
+    assert_has_line "$pkg" "## Instruction files (binding)" "package has the instruction section"
+    assert_has_line "$pkg" "     2  ROOT_RULE: keep functions small." "root rule inlined"
+    assert_has_line "$pkg" "     2  NESTED_RULE: never read a whole collection in one call." "nested rule inlined"
+    assert_contains "$pkg" "SIBLING_RULE" "rules of every changed file's directories (pkg/other changed)"
+    assert_not_contains "$pkg" "DEEP_RULE" "directory below a changed file excluded"
+    local files_line instr_line diff_line
+    files_line="$(grep -nxF '## Files changed' "$pkg" | cut -d: -f1)"
+    instr_line="$(grep -nxF '## Instruction files (binding)' "$pkg" | cut -d: -f1)"
+    diff_line="$(grep -nxF '## Diff' "$pkg" | cut -d: -f1)"
+    if [[ -n "$files_line" && -n "$instr_line" && -n "$diff_line" \
+          && "$files_line" -lt "$instr_line" && "$instr_line" -lt "$diff_line" ]]; then
+        pass "section order: files changed, instruction files, diff"
+    else
+        fail "section order: files changed, instruction files, diff"
+    fi
+    assert_has_line "$pkg" " function renderPanel(items) {" "enclosing function opening line"
+    assert_has_line "$pkg" " } // end renderPanel" "enclosing function closing line"
+    assert_has_line "$pkg" "   const farMarker = 1;" "default cap keeps the whole long function"
+    assert_contains "$pkg" "# Context: each hunk shows its whole enclosing function (cap: 400 lines per file)" "header names the context rule"
+    assert_not_contains "$pkg" "# context capped:" "nothing capped at the default cap"
+
+    out="$(cd "$REPO" && SDD_CONTEXT_CAP=45 "$SDD_SCRIPTS/review-package" HEAD~1 HEAD)"
+    pkg="$(package_path "$out")"
+    assert_has_line "$pkg" "# context capped: pkg/sub/long.js (function context over 45 lines; -U10 shown)" "over-cap file marked"
+    assert_contains "$pkg" "# Context capped (-U10 shown): pkg/sub/long.js" "header lists capped files"
+    assert_not_contains "$pkg" "farMarker" "capped file falls back to -U10"
+    assert_not_contains "$pkg" "# context capped: pkg/sub/widget.js" "under-cap file not marked"
+    assert_has_line "$pkg" " } // end renderPanel" "under-cap file keeps function context"
+    assert_not_contains "$pkg" "# context capped: pkg/sub/fresh.js" "new file never marked capped"
+
+    if ( cd "$REPO" && SDD_CONTEXT_CAP=abc "$SDD_SCRIPTS/review-package" HEAD~1 HEAD ) >/dev/null 2>&1; then
+        fail "non-numeric SDD_CONTEXT_CAP rejected"
+    else
+        pass "non-numeric SDD_CONTEXT_CAP rejected"
+    fi
+
+    out="$(cd "$REPO" && "$SDD_SCRIPTS/review-package" HEAD~1 HEAD -- pkg/sub/widget.js)"
+    pkg="$(package_path "$out")"
+    assert_contains "$pkg" "NESTED_RULE" "pathspec run keeps the scoped file's rules"
+    assert_not_contains "$pkg" "SIBLING_RULE" "pathspec run drops out-of-scope rules"
+    assert_not_contains "$pkg" "pkg/sub/long.js" "pathspec run drops out-of-scope diffs"
+
+    printf 'SNAPSHOT_RULE: from the working tree.\n' >> "$REPO/pkg/sub/AGENTS.md"
+    local before after
+    before="$(cd "$REPO" && git rev-parse 'HEAD^{tree}')"
+    after="$(cd "$REPO" && "$SDD_SCRIPTS/snapshot")"
+    out="$(cd "$REPO" && "$SDD_SCRIPTS/review-package" "$before" "$after")"
+    pkg="$(package_path "$out")"
+    assert_has_line "$pkg" "     3  SNAPSHOT_RULE: from the working tree." "instruction files read from the HEAD tree-ish (snapshot)"
+    ( cd "$REPO" && git checkout -q -- pkg/sub/AGENTS.md )
+}
+
 main() {
     echo "=== Test: sdd review context ==="
 
@@ -148,6 +224,7 @@ main() {
 
     make_fixture
     test_instruction_files
+    test_review_package
 
     echo ""
     if [[ "$FAILURES" -ne 0 ]]; then
