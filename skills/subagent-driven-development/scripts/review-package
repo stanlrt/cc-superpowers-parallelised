@@ -84,17 +84,26 @@ range=("$base" "$head")
 if [ ${#paths[@]} -gt 0 ]; then
   range+=(-- "${paths[@]}")
 fi
-gitdiff=(git diff --no-color --no-ext-diff)
+gitdiff=(git diff --no-color --no-ext-diff --submodule=short --no-relative)
 ctx=10
 
+# Changed paths (NUL-safe, for the instruction-files argv) and the display
+# names, one per diff chunk in the order git lists the chunks. A typechange
+# (file <-> symlink) is two chunks under one path, so its name is listed
+# twice; a rename or copy lists its new path. A path holding a newline is
+# shown with it escaped as \n, because awk reads the names one per line (and
+# mawk cannot split on NUL).
 changed=()
-while IFS= read -r -d '' f; do
+: > "$tmp/names"
+while IFS= read -r -d '' status; do
+  IFS= read -r -d '' f
+  case $status in R*|C*) IFS= read -r -d '' f ;; esac
   changed+=("$f")
-done < <("${gitdiff[@]}" --name-only -z "${range[@]}")
-# One path per chunk, in the order git lists the chunks.
-for f in ${changed[@]+"${changed[@]}"}; do printf '%s\n' "$f"; done > "$tmp/names"
+  printf '%s\n' "${f//$'\n'/\\n}" >> "$tmp/names"
+  case $status in T*) printf '%s\n' "${f//$'\n'/\\n}" >> "$tmp/names" ;; esac
+done < <("${gitdiff[@]}" --name-status -z "${range[@]}")
 
-"$scripts/instruction-files" --tree "$head" ${changed[@]+"${changed[@]}"} > "$tmp/instr"
+"$scripts/instruction-files" --tree "$head" -- ${changed[@]+"${changed[@]}"} > "$tmp/instr"
 
 diffargs=(--src-prefix=a/ --dst-prefix=b/)
 "${gitdiff[@]}" "${diffargs[@]}" --function-context -U"$ctx" "${range[@]}" > "$tmp/wide"

@@ -7,7 +7,8 @@
 # govern the task's files: every backticked path on a list line of the
 # task's **Files:** block (a trailing :N or :N-M line range is stripped),
 # resolved by the sibling `instruction-files` helper against the working
-# tree. The block ends at the first blank line after a list item, and a
+# tree. An indented line after an item continues it. The block ends at the
+# first blank line after a list item, and a
 # **Files:** inside a code fence is ignored. No Files block, no governing
 # file, or no git repo: no section.
 #
@@ -35,7 +36,7 @@ else
 fi
 
 awk -v n="$n" '
-  /^```/ { infence = !infence }
+  /^[ \t]*```/ { infence = !infence }
   !infence && /^#+[ \t]+Task[ \t]+[0-9]+/ {
     intask = ($0 ~ ("^#+[ \t]+Task[ \t]+" n "([^0-9]|$)"))
   }
@@ -51,26 +52,27 @@ files=()
 while IFS= read -r f; do
   files+=("$f")
 done < <(awk '
-  /^[ \t]*```/ { infence = !infence; inblock = 0; next }
-  infence { next }
-  /^\*\*Files:\*\*/ { inblock = 1; seen = 0; next }
-  inblock && /^[ \t]*[-*][ \t]/ {
-    seen = 1
-    line = $0
+  # Print each backticked token of LINE, minus a trailing :N or :N-M range.
+  function emit(line,   tok) {
     while (match(line, /`[^`]+`/)) {
       tok = substr(line, RSTART + 1, RLENGTH - 2)
       sub(/:[0-9]+(-[0-9]+)?$/, "", tok)
       print tok
       line = substr(line, RSTART + RLENGTH)
     }
-    next
   }
+  /^[ \t]*```/ { infence = !infence; inblock = 0; next }
+  infence { next }
+  /^\*\*Files:\*\*/ { inblock = 1; seen = 0; next }
+  inblock && /^[ \t]*[-*][ \t]/ { seen = 1; emit($0); next }
+  # An indented line after an item continues that (wrapped) item.
+  inblock && seen && /^[ \t]+[^ \t]/ { emit($0); next }
   inblock && /^[ \t]*$/ { if (seen) inblock = 0; next }
   { inblock = 0 }
 ' "$out")
 
 if [ ${#files[@]} -gt 0 ] && git rev-parse --show-toplevel >/dev/null 2>&1; then
-  section=$("$scripts/instruction-files" "${files[@]}")
+  section=$("$scripts/instruction-files" -- "${files[@]}")
   if [ -n "$section" ]; then
     printf '\n%s\n' "$section" >> "$out"
   fi

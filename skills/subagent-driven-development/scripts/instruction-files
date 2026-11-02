@@ -9,9 +9,10 @@
 # the files by script, not by memory, puts every governing rule in front of
 # the subagent.
 #
-# Usage: instruction-files [--tree TREEISH] PATH...
+# Usage: instruction-files [--tree TREEISH] [--] PATH...
 #   PATH            repo-root-relative path. It need not exist: a file a task
 #                   will create still gets the files of its existing ancestors.
+#   --              end of options, so a PATH may start with "-".
 #   --tree TREEISH  read the instruction files from this tree (a commit, or a
 #                   `snapshot` tree SHA) instead of the working tree.
 #
@@ -24,7 +25,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: instruction-files [--tree TREEISH] PATH..." >&2
+  echo "usage: instruction-files [--tree TREEISH] [--] PATH..." >&2
   exit 2
 }
 
@@ -35,6 +36,9 @@ case "${1:-}" in
     tree=$2
     shift 2
     ;;
+esac
+case "${1:-}" in
+  --) shift ;;
   -*) usage ;;
 esac
 
@@ -46,6 +50,21 @@ cd "$root"
 
 # Instruction file names, checked in every directory.
 names="AGENTS.md CLAUDE.md"
+
+# in_repo PATH — true when PATH, with symlinks resolved, stays inside the repo
+# root (a working-tree read must not follow a link out of the repository).
+in_repo() {
+  local p=$1 hops=0 t d
+  while [ -L "$p" ]; do
+    hops=$((hops + 1))
+    [ "$hops" -le 10 ] || return 1
+    t=$(readlink -- "$p")
+    case $t in /*) p=$t ;; *) p=$(dirname -- "$p")/$t ;; esac
+  done
+  d=$(cd "$(dirname -- "$p")" 2>/dev/null && pwd -P) || return 1
+  case $d/ in "$root"/*) return 0 ;; esac
+  return 1
+}
 
 # is_file PATH — true when PATH is a regular file in the source.
 is_file() {
@@ -160,6 +179,11 @@ done
 seen_ids=()
 seen_paths=()
 for f in "${found[@]}"; do
+  if [ -z "$tree" ] && ! in_repo "$f"; then
+    echo
+    echo "### $f — symlink outside the repository (not read)"
+    continue
+  fi
   if ! id=$(blob_id "$f"); then
     echo
     echo "### $f — symlink to $(git cat-file blob "${tree}:$f")"

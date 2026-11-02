@@ -30,6 +30,9 @@ trap 'rm -f "$tmpidx"' EXIT
 
 # Seed the temp index from the real one so entry modes survive: under
 # core.fileMode=false a fresh index would record every file as 100644.
+# Seeding also carries assume-unchanged / skip-worktree flags, so edits to
+# such files are not captured, the same as what the controller's `git add`
+# would commit.
 realidx=$(git rev-parse --git-path index)
 if [ -f "$realidx" ]; then
   cp -- "$realidx" "$tmpidx"

@@ -25,6 +25,14 @@ assert_contains() {
     if grep -qF -- "$2" "$1"; then pass "$3"; else fail "$3"; echo "    missing: $2"; fi
 }
 
+# assert_exit EXPECTED DESCRIPTION CMD... — CMD, run silently, exits EXPECTED.
+assert_exit() {
+    local want=$1 desc=$2 rc=0
+    shift 2
+    "$@" >/dev/null 2>&1 || rc=$?
+    if [[ "$rc" == "$want" ]]; then pass "$desc"; else fail "$desc"; echo "    got exit: $rc (want $want)"; fi
+}
+
 # assert_not_contains FILE NEEDLE DESCRIPTION
 assert_not_contains() {
     if grep -qF -- "$2" "$1"; then fail "$3"; echo "    unexpected: $2"; else pass "$3"; fi
@@ -49,12 +57,22 @@ filler() {
     done
 }
 
+# new_repo NAME — an empty repo under TEST_ROOT; prints its physical path.
+new_repo() {
+    git init -q -b main "$TEST_ROOT/$1"
+    ( cd "$TEST_ROOT/$1" && git rev-parse --show-toplevel )
+}
+
+# commit_all REPO MESSAGE
+commit_all() {
+    ( cd "$1" && git add -A && git "${GIT_ID[@]}" commit -qm "$2" )
+}
+
 # make_fixture — a repo with instruction files at several depths and two
 # source files. No .gitattributes: function context comes from git's
 # default funcname rule.
 make_fixture() {
-    git init -q -b main "$TEST_ROOT/repo"
-    REPO="$(cd "$TEST_ROOT/repo" && git rev-parse --show-toplevel)"
+    REPO="$(new_repo repo)"
     mkdir -p "$REPO/pkg/sub/deep" "$REPO/pkg/other"
     printf '# Root rules\nROOT_RULE: keep functions small.\n' > "$REPO/AGENTS.md"
     printf '# Sub rules\nNESTED_RULE: never read a whole collection in one call.\n' > "$REPO/pkg/sub/AGENTS.md"
@@ -83,7 +101,7 @@ make_fixture() {
         echo '  const farMarker = 1;'
         echo '} // end longTail'
     } > "$REPO/pkg/sub/long.js"
-    ( cd "$REPO" && git add -A && git "${GIT_ID[@]}" commit -qm c1 )
+    commit_all "$REPO" c1
 }
 
 test_instruction_files() {
@@ -132,12 +150,6 @@ test_instruction_files() {
     ( cd "$REPO" && "$SDD_SCRIPTS/instruction-files" pkg/sub/widget.js ) > "$out"
     assert_contains "$out" "     3  UNCOMMITTED_RULE: working tree only." "default mode reads the working tree"
     ( cd "$REPO" && git checkout -q -- pkg/sub/AGENTS.md )
-
-    if ( cd "$REPO" && "$SDD_SCRIPTS/instruction-files" --tree nosuchref x.js ) >/dev/null 2>&1; then
-        fail "bad TREEISH exits non-zero"
-    else
-        pass "bad TREEISH exits non-zero"
-    fi
 }
 
 # make_change — commit c2: one-line edits deep inside widget.js and long.js,
@@ -148,8 +160,8 @@ make_change() {
         && sed -i.bak 's/  let seed = 0;/  let seed = 1;/' pkg/sub/long.js \
         && rm -f pkg/sub/*.bak \
         && printf 'export const other = 2;\n' > pkg/other/thing.js \
-        && { echo 'function fresh() {'; filler 60 fresh; echo '}'; } > pkg/sub/fresh.js \
-        && git add -A && git "${GIT_ID[@]}" commit -qm c2 )
+        && { echo 'function fresh() {'; filler 60 fresh; echo '}'; } > pkg/sub/fresh.js )
+    commit_all "$REPO" c2
 }
 
 # package_path OUTPUT — the package path from review-package's "wrote" line.
@@ -194,11 +206,8 @@ test_review_package() {
     assert_has_line "$pkg" " } // end renderPanel" "under-cap file keeps function context"
     assert_not_contains "$pkg" "# context capped: pkg/sub/fresh.js" "new file never marked capped"
 
-    if ( cd "$REPO" && SDD_CONTEXT_CAP=abc "$SDD_SCRIPTS/review-package" HEAD~1 HEAD ) >/dev/null 2>&1; then
-        fail "non-numeric SDD_CONTEXT_CAP rejected"
-    else
-        pass "non-numeric SDD_CONTEXT_CAP rejected"
-    fi
+    assert_exit 2 "non-numeric SDD_CONTEXT_CAP rejected" \
+        bash -c "cd '$REPO' && SDD_CONTEXT_CAP=abc '$SDD_SCRIPTS/review-package' HEAD~1 HEAD"
 
     out="$(cd "$REPO" && "$SDD_SCRIPTS/review-package" HEAD~1 HEAD -- pkg/sub/widget.js)"
     pkg="$(package_path "$out")"
@@ -286,27 +295,9 @@ PLAN
     fi
 }
 
-# new_repo NAME — an empty repo under TEST_ROOT; prints its physical path.
-new_repo() {
-    git init -q -b main "$TEST_ROOT/$1"
-    ( cd "$TEST_ROOT/$1" && git rev-parse --show-toplevel )
-}
-
-# commit_all REPO MESSAGE
-commit_all() {
-    ( cd "$1" && git add -A && git "${GIT_ID[@]}" commit -qm "$2" )
-}
-
-# exit_code CMD... — run CMD silently, print its exit status.
-exit_code() {
-    local rc=0
-    "$@" >/dev/null 2>&1 || rc=$?
-    echo "$rc"
-}
-
 test_instruction_files_extras() {
     echo "--- instruction-files: arguments, ordering, symlinks ---"
-    local out rc
+    local out
     out="$TEST_ROOT/ife.txt"
 
     ( cd "$REPO" && "$SDD_SCRIPTS/instruction-files" pkg/other/thing.js pkg/sub/widget.js ) > "$out"
@@ -326,15 +317,15 @@ test_instruction_files_extras() {
     ( cd "$REPO" && "$SDD_SCRIPTS/instruction-files" --tree "$snap" pkg/sub/widget.js ) > "$out"
     assert_contains "$out" "NESTED_RULE" "--tree accepts a snapshot tree SHA"
 
-    rc="$(exit_code bash -c "cd '$REPO' && '$SDD_SCRIPTS/instruction-files' --tree")"
-    [[ "$rc" == 2 ]] && pass "--tree without an argument exits 2" || { fail "--tree without an argument exits 2"; echo "    got: $rc"; }
-    rc="$(exit_code bash -c "cd '$REPO' && '$SDD_SCRIPTS/instruction-files' --tree nosuchref x.js")"
-    [[ "$rc" == 2 ]] && pass "bad TREEISH exits 2" || { fail "bad TREEISH exits 2"; echo "    got: $rc"; }
-    rc="$(exit_code bash -c "cd '$REPO' && '$SDD_SCRIPTS/instruction-files' --trees HEAD x.js")"
-    [[ "$rc" == 2 ]] && pass "unknown flag exits 2" || { fail "unknown flag exits 2"; echo "    got: $rc"; }
+    assert_exit 2 "--tree without an argument exits 2" \
+        bash -c "cd '$REPO' && '$SDD_SCRIPTS/instruction-files' --tree"
+    assert_exit 2 "bad TREEISH exits 2" \
+        bash -c "cd '$REPO' && '$SDD_SCRIPTS/instruction-files' --tree nosuchref x.js"
+    assert_exit 2 "unknown flag exits 2" \
+        bash -c "cd '$REPO' && '$SDD_SCRIPTS/instruction-files' --trees HEAD x.js"
     mkdir -p "$TEST_ROOT/nogit2"
-    rc="$(exit_code bash -c "cd '$TEST_ROOT/nogit2' && GIT_CEILING_DIRECTORIES='$TEST_ROOT' '$SDD_SCRIPTS/instruction-files' x.js")"
-    [[ "$rc" == 2 ]] && pass "outside a git repo exits 2" || { fail "outside a git repo exits 2"; echo "    got: $rc"; }
+    assert_exit 2 "outside a git repo exits 2" \
+        bash -c "cd '$TEST_ROOT/nogit2' && GIT_CEILING_DIRECTORIES='$TEST_ROOT' '$SDD_SCRIPTS/instruction-files' x.js"
 
     local lr
     lr="$(new_repo linkrepo)"
@@ -362,7 +353,7 @@ test_instruction_files_extras() {
 
 test_review_package_extras() {
     echo "--- review-package: diff config, rename, binary, big file ---"
-    local out pkg rc
+    local out pkg
 
     ( cd "$REPO" && git config color.ui always && git config diff.external /bin/echo )
     out="$(cd "$REPO" && "$SDD_SCRIPTS/review-package" HEAD~1 HEAD)"
@@ -370,8 +361,8 @@ test_review_package_extras() {
     ( cd "$REPO" && git config --unset color.ui && git config --unset diff.external )
     assert_has_line "$pkg" " } // end renderPanel" "color.ui=always and diff.external do not empty the diff"
 
-    rc="$(exit_code bash -c "cd '$REPO' && SDD_CONTEXT_CAP=0 '$SDD_SCRIPTS/review-package' HEAD~1 HEAD")"
-    [[ "$rc" == 2 ]] && pass "SDD_CONTEXT_CAP=0 rejected" || { fail "SDD_CONTEXT_CAP=0 rejected"; echo "    got: $rc"; }
+    assert_exit 2 "SDD_CONTEXT_CAP=0 rejected" \
+        bash -c "cd '$REPO' && SDD_CONTEXT_CAP=0 '$SDD_SCRIPTS/review-package' HEAD~1 HEAD"
 
     local rr
     rr="$(new_repo rr)"
@@ -463,6 +454,69 @@ PLAN
     assert_not_contains "$brief" "NESTED_RULE" "backticked non-path token pulls in no nested rules"
 }
 
+test_final_fixes() {
+    echo "--- dash-leading token, typechange, wrapped item, outside symlink ---"
+    local out brief pkg
+
+    cat > "$REPO/plan3.md" <<'PLAN'
+# Plan
+
+### Task 1: Dash-leading token
+
+**Files:**
+- Modify: `--verbose` handling in `pkg/sub/cli.sh`
+
+Do it.
+
+### Task 2: Wrapped item
+
+**Files:**
+- Modify: `README.md`, and a long description that wraps onto
+  a second line naming `pkg/sub/widget.js`
+- Test: `pkg/other/thing.js`
+
+Do it.
+PLAN
+    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan3.md 1)"
+    brief="$(brief_path "$out")"
+    printf '%s\n' "$out" > "$TEST_ROOT/wrote.txt"
+    assert_contains "$TEST_ROOT/wrote.txt" "wrote " "dash-leading first token: brief written, wrote line printed"
+    assert_contains "$brief" "NESTED_RULE" "dash-leading first token: later path still resolved"
+    ( cd "$REPO" && "$SDD_SCRIPTS/instruction-files" -- pkg/sub/widget.js ) > "$TEST_ROOT/dd.txt"
+    assert_contains "$TEST_ROOT/dd.txt" "NESTED_RULE" "instruction-files accepts -- as end of options"
+
+    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan3.md 2)"
+    brief="$(brief_path "$out")"
+    assert_contains "$brief" "NESTED_RULE" "wrapped item: continuation line path resolved"
+    assert_contains "$brief" "SIBLING_RULE" "wrapped item: following item still resolved"
+
+    local tc
+    tc="$(new_repo tc)"
+    printf 'plain\n' > "$tc/a.txt"
+    { echo 'function longOne() {'; filler 30 aa; echo '  let mark = 0;'; filler 30 bb; echo '}'; } > "$tc/z.js"
+    commit_all "$tc" t1
+    ( cd "$tc" && rm a.txt && ln -s z.js a.txt && sed -i.bak 's/  let mark = 0;/  let mark = 1;/' z.js && rm -f z.js.bak )
+    commit_all "$tc" t2
+    out="$(cd "$tc" && SDD_CONTEXT_CAP=45 "$SDD_SCRIPTS/review-package" HEAD~1 HEAD)"
+    pkg="$(package_path "$out")"
+    assert_has_line "$pkg" "# context capped: z.js (function context over 45 lines; -U10 shown)" "typechange before a capped file: label names the capped file"
+    assert_not_contains "$pkg" "# context capped: a.txt" "typechanged file not labelled capped"
+
+    local ol
+    ol="$(new_repo outlink)"
+    printf 'SECRET_OUTSIDE: do not print.\n' > "$TEST_ROOT/outside.md"
+    mkdir -p "$ol/d" "$ol/e"
+    printf 'IN_RULE: inside.\n' > "$ol/AGENTS.md"
+    ln -s "$TEST_ROOT/outside.md" "$ol/d/CLAUDE.md"
+    ln -s ../../outside.md "$ol/e/CLAUDE.md"
+    commit_all "$ol" ol
+    ( cd "$ol" && "$SDD_SCRIPTS/instruction-files" d/x.js e/y.js ) > "$TEST_ROOT/ol.txt"
+    assert_not_contains "$TEST_ROOT/ol.txt" "SECRET_OUTSIDE" "symlink outside the repo is not read"
+    assert_has_line "$TEST_ROOT/ol.txt" "### d/CLAUDE.md — symlink outside the repository (not read)" "absolute outside symlink named"
+    assert_has_line "$TEST_ROOT/ol.txt" "### e/CLAUDE.md — symlink outside the repository (not read)" "relative outside symlink named"
+    assert_contains "$TEST_ROOT/ol.txt" "IN_RULE" "in-repo rules still printed"
+}
+
 main() {
     echo "=== Test: sdd review context ==="
 
@@ -477,6 +531,7 @@ main() {
     test_review_package_extras
     test_snapshot_filemode
     test_task_brief_extras
+    test_final_fixes
 
     echo ""
     if [[ "$FAILURES" -ne 0 ]]; then

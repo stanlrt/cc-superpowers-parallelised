@@ -324,10 +324,11 @@ final whole-branch review. When you fill a reviewer template:
 - Hand the reviewer its diff as a file — the `scripts/review-package` path
   from [Handling Implementer Status](#handling-implementer-status), never
   pasted into your own context. The package has no commit list (the work is
-  uncommitted) — that is expected. Without bash: `git diff --no-color --no-ext-diff --stat BASE AFTER`
-  and `git diff --no-color --no-ext-diff --function-context BASE AFTER` redirected to one uniquely
-  named file, plus every AGENTS.md / CLAUDE.md from the repo root down to
-  each changed file's directory appended to it.
+  uncommitted) — that is expected. Without bash:
+  `git diff --no-color --no-ext-diff --stat BASE AFTER` and
+  `git diff --no-color --no-ext-diff --function-context BASE AFTER`
+  redirected to one uniquely named file, plus every AGENTS.md / CLAUDE.md
+  from the repo root down to each changed file's directory appended to it.
 - A dispatch prompt describes one task, not the session's history. Do not
   paste accumulated prior-task summaries ("state after Tasks 1-3") into
   later dispatches — a real session's dispatch hit 42k chars of which 99%
