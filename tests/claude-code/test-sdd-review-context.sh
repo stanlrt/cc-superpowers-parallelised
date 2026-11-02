@@ -349,6 +349,37 @@ test_instruction_files_extras() {
     assert_contains "$out" "SPACE_RULE" "working tree: path with a space"
     ( cd "$lr" && "$SDD_SCRIPTS/instruction-files" --tree HEAD "sp ace/f.js" ) > "$out"
     assert_contains "$out" "SPACE_RULE" "--tree: path with a space"
+
+    ( cd "$REPO" && "$SDD_SCRIPTS/instruction-files" -- pkg/sub/widget.js ) > "$TEST_ROOT/dd.txt"
+    assert_contains "$TEST_ROOT/dd.txt" "NESTED_RULE" "instruction-files accepts -- as end of options"
+
+    local ol
+    ol="$(new_repo outlink)"
+    printf 'SECRET_OUTSIDE: do not print.\n' > "$TEST_ROOT/outside.md"
+    mkdir -p "$ol/d" "$ol/e"
+    printf 'IN_RULE: inside.\n' > "$ol/AGENTS.md"
+    ln -s "$TEST_ROOT/outside.md" "$ol/d/CLAUDE.md"
+    ln -s ../../outside.md "$ol/e/CLAUDE.md"
+    commit_all "$ol" ol
+    ( cd "$ol" && "$SDD_SCRIPTS/instruction-files" d/x.js e/y.js ) > "$TEST_ROOT/ol.txt"
+    assert_not_contains "$TEST_ROOT/ol.txt" "SECRET_OUTSIDE" "symlink outside the repo is not read"
+    assert_has_line "$TEST_ROOT/ol.txt" "### d/CLAUDE.md — symlink outside the repository (not read)" "absolute outside symlink named"
+    assert_has_line "$TEST_ROOT/ol.txt" "### e/CLAUDE.md — symlink outside the repository (not read)" "relative outside symlink named"
+    assert_contains "$TEST_ROOT/ol.txt" "IN_RULE" "in-repo rules still printed"
+
+    local esc outd
+    esc="$(new_repo escape)"
+    outd="$TEST_ROOT/escape-outside"
+    mkdir -p "$outd" "$TEST_ROOT/b"
+    printf 'SECRET_ESCAPE: do not print.\n' > "$TEST_ROOT/b/x"
+    ln -s ../b/x "$outd/CLAUDE.md"
+    ln -s "$outd" "$esc/sub"
+    mkdir -p "$esc/b"
+    printf 'decoy\n' > "$esc/b/keep"
+    commit_all "$esc" esc
+    ( cd "$esc" && "$SDD_SCRIPTS/instruction-files" sub/f.js ) > "$TEST_ROOT/esc.txt"
+    assert_not_contains "$TEST_ROOT/esc.txt" "SECRET_ESCAPE" "dir symlink + ../ link target: outside file not read"
+    assert_contains "$TEST_ROOT/esc.txt" "symlink outside the repository (not read)" "dir symlink + ../ link target: named as outside"
 }
 
 test_review_package_extras() {
@@ -392,6 +423,18 @@ test_review_package_extras() {
     pkg="$(package_path "$out")"
     assert_contains "$pkg" "# context capped: huge.js" "20k-line function file: package produced, capped"
     assert_contains "$pkg" "+  let target = 1;" "20k-line function file: change present"
+
+    local tc
+    tc="$(new_repo tc)"
+    printf 'plain\n' > "$tc/a.txt"
+    { echo 'function longOne() {'; filler 30 aa; echo '  let mark = 0;'; filler 30 bb; echo '}'; } > "$tc/z.js"
+    commit_all "$tc" t1
+    ( cd "$tc" && rm a.txt && ln -s z.js a.txt && sed -i.bak 's/  let mark = 0;/  let mark = 1;/' z.js && rm -f z.js.bak )
+    commit_all "$tc" t2
+    out="$(cd "$tc" && SDD_CONTEXT_CAP=45 "$SDD_SCRIPTS/review-package" HEAD~1 HEAD)"
+    pkg="$(package_path "$out")"
+    assert_has_line "$pkg" "# context capped: z.js (function context over 45 lines; -U10 shown)" "typechange before a capped file: label names the capped file"
+    assert_not_contains "$pkg" "# context capped: a.txt" "typechanged file not labelled capped"
 }
 
 test_snapshot_filemode() {
@@ -414,6 +457,7 @@ test_snapshot_filemode() {
 
 test_task_brief_extras() {
     echo "--- task-brief: Files block parsing ---"
+    local out brief
     cat > "$REPO/plan2.md" <<'PLAN'
 # Plan
 
@@ -440,7 +484,6 @@ Nothing real here.
 **Files:**
 - Modify: `README.md` and call `renderPanel()`
 PLAN
-    local out brief
     out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan2.md 1)"
     brief="$(brief_path "$out")"
     assert_contains "$brief" "ROOT_RULE" "block item parsed"
@@ -452,11 +495,6 @@ PLAN
     brief="$(brief_path "$out")"
     assert_contains "$brief" "ROOT_RULE" "real path still resolved beside a non-path token"
     assert_not_contains "$brief" "NESTED_RULE" "backticked non-path token pulls in no nested rules"
-}
-
-test_final_fixes() {
-    echo "--- dash-leading token, typechange, wrapped item, outside symlink ---"
-    local out brief pkg
 
     cat > "$REPO/plan3.md" <<'PLAN'
 # Plan
@@ -479,43 +517,15 @@ Do it.
 PLAN
     out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan3.md 1)"
     brief="$(brief_path "$out")"
-    printf '%s\n' "$out" > "$TEST_ROOT/wrote.txt"
-    assert_contains "$TEST_ROOT/wrote.txt" "wrote " "dash-leading first token: brief written, wrote line printed"
+    if [[ -n "$brief" && -f "$brief" ]]; then pass "dash-leading first token: brief written"; else fail "dash-leading first token: brief written"; fi
     assert_contains "$brief" "NESTED_RULE" "dash-leading first token: later path still resolved"
-    ( cd "$REPO" && "$SDD_SCRIPTS/instruction-files" -- pkg/sub/widget.js ) > "$TEST_ROOT/dd.txt"
-    assert_contains "$TEST_ROOT/dd.txt" "NESTED_RULE" "instruction-files accepts -- as end of options"
 
     out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan3.md 2)"
     brief="$(brief_path "$out")"
     assert_contains "$brief" "NESTED_RULE" "wrapped item: continuation line path resolved"
     assert_contains "$brief" "SIBLING_RULE" "wrapped item: following item still resolved"
-
-    local tc
-    tc="$(new_repo tc)"
-    printf 'plain\n' > "$tc/a.txt"
-    { echo 'function longOne() {'; filler 30 aa; echo '  let mark = 0;'; filler 30 bb; echo '}'; } > "$tc/z.js"
-    commit_all "$tc" t1
-    ( cd "$tc" && rm a.txt && ln -s z.js a.txt && sed -i.bak 's/  let mark = 0;/  let mark = 1;/' z.js && rm -f z.js.bak )
-    commit_all "$tc" t2
-    out="$(cd "$tc" && SDD_CONTEXT_CAP=45 "$SDD_SCRIPTS/review-package" HEAD~1 HEAD)"
-    pkg="$(package_path "$out")"
-    assert_has_line "$pkg" "# context capped: z.js (function context over 45 lines; -U10 shown)" "typechange before a capped file: label names the capped file"
-    assert_not_contains "$pkg" "# context capped: a.txt" "typechanged file not labelled capped"
-
-    local ol
-    ol="$(new_repo outlink)"
-    printf 'SECRET_OUTSIDE: do not print.\n' > "$TEST_ROOT/outside.md"
-    mkdir -p "$ol/d" "$ol/e"
-    printf 'IN_RULE: inside.\n' > "$ol/AGENTS.md"
-    ln -s "$TEST_ROOT/outside.md" "$ol/d/CLAUDE.md"
-    ln -s ../../outside.md "$ol/e/CLAUDE.md"
-    commit_all "$ol" ol
-    ( cd "$ol" && "$SDD_SCRIPTS/instruction-files" d/x.js e/y.js ) > "$TEST_ROOT/ol.txt"
-    assert_not_contains "$TEST_ROOT/ol.txt" "SECRET_OUTSIDE" "symlink outside the repo is not read"
-    assert_has_line "$TEST_ROOT/ol.txt" "### d/CLAUDE.md — symlink outside the repository (not read)" "absolute outside symlink named"
-    assert_has_line "$TEST_ROOT/ol.txt" "### e/CLAUDE.md — symlink outside the repository (not read)" "relative outside symlink named"
-    assert_contains "$TEST_ROOT/ol.txt" "IN_RULE" "in-repo rules still printed"
 }
+
 
 main() {
     echo "=== Test: sdd review context ==="
@@ -531,7 +541,6 @@ main() {
     test_review_package_extras
     test_snapshot_filemode
     test_task_brief_extras
-    test_final_fixes
 
     echo ""
     if [[ "$FAILURES" -ne 0 ]]; then

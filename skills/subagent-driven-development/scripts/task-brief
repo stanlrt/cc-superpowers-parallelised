@@ -8,9 +8,8 @@
 # task's **Files:** block (a trailing :N or :N-M line range is stripped),
 # resolved by the sibling `instruction-files` helper against the working
 # tree. An indented line after an item continues it. The block ends at the
-# first blank line after a list item, and a
-# **Files:** inside a code fence is ignored. No Files block, no governing
-# file, or no git repo: no section.
+# first blank line after a list item, and a **Files:** inside a code fence is
+# ignored. No Files block, no governing file, or no git repo: no section.
 #
 # Usage: task-brief PLAN_FILE TASK_NUMBER [OUTFILE]
 # Default OUTFILE: <repo-root>/.superpowers/sdd/task-<N>-brief.md

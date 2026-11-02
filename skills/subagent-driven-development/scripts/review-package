@@ -84,7 +84,7 @@ range=("$base" "$head")
 if [ ${#paths[@]} -gt 0 ]; then
   range+=(-- "${paths[@]}")
 fi
-gitdiff=(git diff --no-color --no-ext-diff --submodule=short --no-relative)
+gitdiff=(git -c diff.relative=false diff --no-color --no-ext-diff --submodule=short)
 ctx=10
 
 # Changed paths (NUL-safe, for the instruction-files argv) and the display
@@ -94,13 +94,16 @@ ctx=10
 # shown with it escaped as \n, because awk reads the names one per line (and
 # mawk cannot split on NUL).
 changed=()
+nl=$'\n'
+esc='\n'
 : > "$tmp/names"
 while IFS= read -r -d '' status; do
   IFS= read -r -d '' f
   case $status in R*|C*) IFS= read -r -d '' f ;; esac
   changed+=("$f")
-  printf '%s\n' "${f//$'\n'/\\n}" >> "$tmp/names"
-  case $status in T*) printf '%s\n' "${f//$'\n'/\\n}" >> "$tmp/names" ;; esac
+  shown=${f//$nl/$esc}
+  printf '%s\n' "$shown" >> "$tmp/names"
+  case $status in T*) printf '%s\n' "$shown" >> "$tmp/names" ;; esac
 done < <("${gitdiff[@]}" --name-status -z "${range[@]}")
 
 "$scripts/instruction-files" --tree "$head" -- ${changed[@]+"${changed[@]}"} > "$tmp/instr"

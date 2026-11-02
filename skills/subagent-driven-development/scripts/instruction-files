@@ -51,17 +51,20 @@ cd "$root"
 # Instruction file names, checked in every directory.
 names="AGENTS.md CLAUDE.md"
 
+# Most symlink hops either resolver follows before giving up.
+max_hops=10
+
 # in_repo PATH — true when PATH, with symlinks resolved, stays inside the repo
 # root (a working-tree read must not follow a link out of the repository).
 in_repo() {
   local p=$1 hops=0 t d
   while [ -L "$p" ]; do
+    [ "$hops" -lt "$max_hops" ] || return 1
     hops=$((hops + 1))
-    [ "$hops" -le 10 ] || return 1
     t=$(readlink -- "$p")
     case $t in /*) p=$t ;; *) p=$(dirname -- "$p")/$t ;; esac
   done
-  d=$(cd "$(dirname -- "$p")" 2>/dev/null && pwd -P) || return 1
+  d=$(cd -P -- "$(dirname -- "$p")" 2>/dev/null && pwd -P) || return 1
   case $d/ in "$root"/*) return 0 ;; esac
   return 1
 }
@@ -101,7 +104,7 @@ join_path() {
 # when PATH is not in the tree or the link does not resolve to a blob.
 tree_blob() {
   local p=$1 hops=0 mode type sha target
-  while [ "$hops" -lt 10 ]; do
+  while [ "$hops" -lt "$max_hops" ]; do
     read -r mode type sha _ < <(git ls-tree "$tree" -- "$p") || return 1
     [ -n "${sha:-}" ] || return 1
     if [ "$mode" = 120000 ]; then
