@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# Print the instruction files (AGENTS.md, CLAUDE.md) that govern a set of
+# paths, as one markdown section a reviewer or implementer reads with the
+# change. A file governs a path when it sits in the repo root or in any
+# directory on the way down to that path's directory.
+#
+# A nested instruction file holds rules no brief repeats, and a harness loads
+# it only when an agent happens to read a file in that directory. Gathering
+# the files by script, not by memory, puts every governing rule in front of
+# the subagent.
+#
+# Usage: instruction-files [--tree TREEISH] PATH...
+#   PATH            repo-root-relative path. It need not exist: a file a task
+#                   will create still gets the files of its existing ancestors.
+#   --tree TREEISH  read the instruction files from this tree (a commit, or a
+#                   `snapshot` tree SHA) instead of the working tree.
+#
+# Output: nothing when no instruction file governs any PATH. Otherwise a
+# "## Instruction files (binding)" section: the file paths (root first, then
+# by depth), then each file's content with line numbers, so a finding can
+# cite path:line. A file byte-identical to one already printed gets a heading
+# that names the first file instead of its content. `@file` imports are not
+# resolved.
+set -euo pipefail
+
+usage() {
+  echo "usage: instruction-files [--tree TREEISH] PATH..." >&2
+  exit 2
+}
+
+tree=""
+if [ "${1:-}" = "--tree" ]; then
+  [ $# -ge 2 ] || usage
+  tree=$2
+  shift 2
+  git rev-parse --verify --quiet "${tree}^{tree}" >/dev/null || { echo "bad TREEISH: $tree" >&2; exit 2; }
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+
+# is_file PATH — true when PATH is a regular file in the source.
+is_file() {
+  if [ -n "$tree" ]; then
+    [ "$(git cat-file -t "${tree}:$1" 2>/dev/null)" = blob ]
+  else
+    [ -f "$1" ]
+  fi
+}
+
+# show PATH — print PATH's content from the source.
+show() {
+  if [ -n "$tree" ]; then
+    git cat-file blob "${tree}:$1"
+  else
+    cat -- "$1"
+  fi
+}
+
+# blob_id PATH — git blob SHA of PATH's content; equal SHAs mean equal bytes.
+blob_id() {
+  if [ -n "$tree" ]; then
+    git rev-parse "${tree}:$1"
+  else
+    git hash-object -- "$1"
+  fi
+}
+
+# candidates PATH... — AGENTS.md and CLAUDE.md in the root and in every
+# directory on the way down to each PATH's directory, one per line.
+candidates() {
+  local p d acc part
+  local parts
+  for p in "$@"; do
+    p=${p#./}
+    printf '%s\n' AGENTS.md CLAUDE.md
+    d=$(dirname -- "$p")
+    [ "$d" = . ] && continue
+    acc=""
+    IFS=/ read -r -a parts <<< "$d"
+    for part in "${parts[@]}"; do
+      acc=${acc:+$acc/}$part
+      printf '%s\n' "$acc/AGENTS.md" "$acc/CLAUDE.md"
+    done
+  done
+}
+
+tab=$(printf '\t')
+found=()
+while IFS= read -r f; do
+  if is_file "$f"; then
+    found+=("$f")
+  fi
+done < <(candidates "$@" | awk -F/ '{ print NF "\t" $0 }' | LC_ALL=C sort -t "$tab" -k1,1n -k2 -u | cut -f2-)
+
+if [ ${#found[@]} -eq 0 ]; then
+  exit 0
+fi
+
+echo "## Instruction files (binding)"
+echo
+echo "These files govern the files in scope. Their rules are binding constraints."
+echo "Cite a rule as path:line."
+echo
+for f in "${found[@]}"; do
+  echo "- $f"
+done
+
+seen_ids=()
+seen_paths=()
+for f in "${found[@]}"; do
+  id=$(blob_id "$f")
+  dup=""
+  i=0
+  while [ "$i" -lt "${#seen_ids[@]}" ]; do
+    if [ "${seen_ids[$i]}" = "$id" ]; then
+      dup=${seen_paths[$i]}
+      break
+    fi
+    i=$((i + 1))
+  done
+  echo
+  if [ -n "$dup" ]; then
+    echo "### $f — identical to $dup"
+  else
+    echo "### $f"
+    show "$f" | awk '{ printf "%6d  %s\n", NR, $0 }'
+    seen_ids+=("$id")
+    seen_paths+=("$f")
+  fi
+done
