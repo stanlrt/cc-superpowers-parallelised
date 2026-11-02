@@ -24,11 +24,26 @@ Subagent (general-purpose):
 
     **Base:** [BASE_SHA]
     **Head:** [HEAD_SHA]
+    **Diff file:** [DIFF_FILE]
+
+    Read the diff file once: a stat summary, the instruction files that
+    govern the changed files, and the diff with each hunk's whole enclosing
+    function (a file marked `# context capped` shows 10 lines instead). If
+    no diff file was given, fetch the diff yourself:
 
     ```bash
     git diff --stat [BASE_SHA]..[HEAD_SHA]
-    git diff [BASE_SHA]..[HEAD_SHA]
+    git diff --function-context [BASE_SHA]..[HEAD_SHA]
     ```
+
+    and read every AGENTS.md / CLAUDE.md from the repo root down to each
+    changed file's directory.
+
+    ## Binding Instructions
+
+    The rules in those instruction files bind this change like the plan
+    does. A change that breaks one is an Important finding by default: cite
+    the rule as path:line next to the code's file:line.
 
     ## Read-Only Review
 
@@ -47,6 +62,12 @@ Subagent (general-purpose):
     - Type safety where applicable?
     - DRY without premature abstraction?
     - Edge cases handled?
+    - For each piece of new state, effect, resource or side effect, check the
+      unchanged code that encloses or calls it: lifecycle and remount
+      behaviour, reactivity/keying, transaction or request scope, loops and
+      limits. A bug can come from new code placed inside old code. This is a
+      named risk by default: one focused read of enclosing code the diff
+      does not show is expected.
 
     **Architecture:**
     - Sound design decisions?
@@ -130,6 +151,7 @@ Subagent (general-purpose):
 - `[PLAN_OR_REQUIREMENTS]` — what it should do (plan file path, task text, or requirements)
 - `[BASE_SHA]` — starting commit
 - `[HEAD_SHA]` — ending commit
+- `[DIFF_FILE]` — the review package path (`../subagent-driven-development/scripts/review-package BASE_SHA HEAD_SHA` prints it). Omit only when the script cannot run; the template's fallback then applies.
 
 **Reviewer returns:** Strengths, Issues (Critical / Important / Minor), Recommendations, Assessment
 

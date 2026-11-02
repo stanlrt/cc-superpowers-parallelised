@@ -93,6 +93,11 @@ Subagent (general-purpose):
     missing, regenerate it yourself:
     `git diff --stat [BASE_SHA]..[HEAD_SHA]` and `git diff [BASE_SHA]..[HEAD_SHA]`.
 
+    The diff file's "Instruction files (binding)" section holds every
+    AGENTS.md / CLAUDE.md that governs the changed files, with line numbers.
+    A branch change that breaks one of their rules is Refactor-Critical: the
+    cited rule (path:line) is the evidence.
+
     ## You MAY read the whole codebase — that is the point
 
     Unlike a per-task reviewer, you are expected to reach outside the diff.
@@ -132,6 +137,10 @@ Subagent (general-purpose):
     - Primitive obsession — bare strings/ints/maps where a small type would
       remove a class of mistakes
     - Naming drift — the same concept named differently across tasks
+    - For each piece of new state, effect, resource or side effect, check the
+      unchanged code that encloses or calls it: lifecycle and remount
+      behaviour, reactivity/keying, transaction or request scope, loops and
+      limits. A bug can come from new code placed inside old code.
     - Structure that works now but will force a painful change on the next
       feature that touches it
 

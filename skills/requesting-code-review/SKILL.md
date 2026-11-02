@@ -29,7 +29,16 @@ BASE_SHA=$(git rev-parse HEAD~1)  # or origin/main
 HEAD_SHA=$(git rev-parse HEAD)
 ```
 
-**2. Dispatch code reviewer subagent:**
+**2. Build the review package:**
+```bash
+../subagent-driven-development/scripts/review-package "$BASE_SHA" "$HEAD_SHA"
+```
+(Path relative to this skill's directory.) It prints the package path:
+the stat summary, the AGENTS.md / CLAUDE.md files that govern the changed
+files, and the diff with each hunk's whole enclosing function. It writes
+under the self-ignored `<repo-root>/.superpowers/sdd/`.
+
+**3. Dispatch code reviewer subagent:**
 
 Dispatch a `general-purpose` subagent, filling the template at [code-reviewer.md](code-reviewer.md)
 
@@ -38,8 +47,9 @@ Dispatch a `general-purpose` subagent, filling the template at [code-reviewer.md
 - `{PLAN_OR_REQUIREMENTS}` - What it should do
 - `{BASE_SHA}` - Starting commit
 - `{HEAD_SHA}` - Ending commit
+- `{DIFF_FILE}` - Review package path from step 2
 
-**3. Act on feedback:**
+**4. Act on feedback:**
 - Fix Critical issues immediately
 - Fix Important issues before proceeding
 - Fix Minor issues before the branch is done — they are small, concrete, and cited
@@ -54,12 +64,14 @@ You: Let me request code review before proceeding.
 
 BASE_SHA=$(git log --oneline | grep "Task 1" | head -1 | awk '{print $1}')
 HEAD_SHA=$(git rev-parse HEAD)
+DIFF_FILE=$(../subagent-driven-development/scripts/review-package "$BASE_SHA" "$HEAD_SHA" | sed -n 's/^wrote \(.*\): .*/\1/p')
 
 [Dispatch code reviewer subagent]
   DESCRIPTION: Added verifyIndex() and repairIndex() with 4 issue types
   PLAN_OR_REQUIREMENTS: Task 2 from docs/superpowers/plans/deployment-plan.md
   BASE_SHA: a7981ec
   HEAD_SHA: 3df7661
+  DIFF_FILE: .superpowers/sdd/review-a7981ec..3df7661.diff
 
 [Subagent returns]:
   Strengths: Clean architecture, real tests
