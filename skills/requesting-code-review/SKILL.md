@@ -31,9 +31,10 @@ HEAD_SHA=$(git rev-parse HEAD)
 
 **2. Build the review package:**
 ```bash
-<this skill's directory>/../subagent-driven-development/scripts/review-package "$BASE_SHA" "$HEAD_SHA"
+<this skill's directory>/../subagent-driven-development/scripts/review-package --print-path "$BASE_SHA" "$HEAD_SHA"
 ```
-It prints a `wrote <path>: ...` line; `<path>` is the package:
+`--print-path` prints only the path of the package (without it, the script
+prints a `wrote <path>: ...` line); the package is
 the stat summary, the AGENTS.md / CLAUDE.md files that govern the changed
 files, and the diff with each hunk's whole enclosing function. It writes
 under the self-ignored `<repo-root>/.superpowers/sdd/`.
@@ -64,7 +65,7 @@ You: Let me request code review before proceeding.
 
 BASE_SHA=$(git log --oneline | grep "Task 1" | head -1 | awk '{print $1}')
 HEAD_SHA=$(git rev-parse HEAD)
-DIFF_FILE=$(<this skill's directory>/../subagent-driven-development/scripts/review-package "$BASE_SHA" "$HEAD_SHA" | sed -n 's/^wrote \(.*\): .*/\1/p')
+DIFF_FILE=$(<this skill's directory>/../subagent-driven-development/scripts/review-package --print-path "$BASE_SHA" "$HEAD_SHA")
 
 [Dispatch code reviewer subagent]
   DESCRIPTION: Added verifyIndex() and repairIndex() with 4 issue types

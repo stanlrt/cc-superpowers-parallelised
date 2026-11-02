@@ -164,9 +164,12 @@ make_change() {
     commit_all "$REPO" c2
 }
 
-# package_path OUTPUT — the package path from review-package's "wrote" line.
+# package_path DIR BASE HEAD [-- PATHSPEC...] — the package path, from running
+# review-package --print-path in DIR (SDD_CONTEXT_CAP etc. pass through).
 package_path() {
-    printf '%s\n' "$1" | sed -n 's/^wrote \(.*\): [0-9].*$/\1/p'
+    local dir=$1
+    shift
+    ( cd "$dir" && "$SDD_SCRIPTS/review-package" --print-path "$@" )
 }
 
 test_review_package() {
@@ -174,8 +177,7 @@ test_review_package() {
     make_change
     local out pkg
 
-    out="$(cd "$REPO" && "$SDD_SCRIPTS/review-package" HEAD~1 HEAD)"
-    pkg="$(package_path "$out")"
+    pkg="$(package_path "$REPO" HEAD~1 HEAD)"
     assert_has_line "$pkg" "## Instruction files (binding)" "package has the instruction section"
     assert_has_line "$pkg" "     2  ROOT_RULE: keep functions small." "root rule inlined"
     assert_has_line "$pkg" "     2  NESTED_RULE: never read a whole collection in one call." "nested rule inlined"
@@ -197,8 +199,7 @@ test_review_package() {
     assert_contains "$pkg" "# Context: each hunk shows its whole enclosing function (cap: 400 lines per file)" "header names the context rule"
     assert_not_contains "$pkg" "# context capped:" "nothing capped at the default cap"
 
-    out="$(cd "$REPO" && SDD_CONTEXT_CAP=45 "$SDD_SCRIPTS/review-package" HEAD~1 HEAD)"
-    pkg="$(package_path "$out")"
+    pkg="$(SDD_CONTEXT_CAP=45 package_path "$REPO" HEAD~1 HEAD)"
     assert_has_line "$pkg" "# context capped: pkg/sub/long.js (function context over 45 lines; -U10 shown)" "over-cap file marked"
     assert_contains "$pkg" "# Context capped (-U10 shown): pkg/sub/long.js" "header lists capped files"
     assert_not_contains "$pkg" "farMarker" "capped file falls back to -U10"
@@ -209,8 +210,7 @@ test_review_package() {
     assert_exit 2 "non-numeric SDD_CONTEXT_CAP rejected" \
         bash -c "cd '$REPO' && SDD_CONTEXT_CAP=abc '$SDD_SCRIPTS/review-package' HEAD~1 HEAD"
 
-    out="$(cd "$REPO" && "$SDD_SCRIPTS/review-package" HEAD~1 HEAD -- pkg/sub/widget.js)"
-    pkg="$(package_path "$out")"
+    pkg="$(package_path "$REPO" HEAD~1 HEAD -- pkg/sub/widget.js)"
     assert_contains "$pkg" "NESTED_RULE" "pathspec run keeps the scoped file's rules"
     assert_not_contains "$pkg" "SIBLING_RULE" "pathspec run drops out-of-scope rules"
     assert_not_contains "$pkg" "pkg/sub/long.js" "pathspec run drops out-of-scope diffs"
@@ -219,15 +219,17 @@ test_review_package() {
     local before after
     before="$(cd "$REPO" && git rev-parse 'HEAD^{tree}')"
     after="$(cd "$REPO" && "$SDD_SCRIPTS/snapshot")"
-    out="$(cd "$REPO" && "$SDD_SCRIPTS/review-package" "$before" "$after")"
-    pkg="$(package_path "$out")"
+    pkg="$(package_path "$REPO" "$before" "$after")"
     assert_has_line "$pkg" "     3  SNAPSHOT_RULE: from the working tree." "instruction files read from the HEAD tree-ish (snapshot)"
     ( cd "$REPO" && git checkout -q -- pkg/sub/AGENTS.md )
 }
 
-# brief_path OUTPUT — the brief path from task-brief's "wrote" line.
+# brief_path DIR PLAN N [OUTFILE] — the brief path, from running
+# task-brief --print-path in DIR.
 brief_path() {
-    printf '%s\n' "$1" | sed -n 's/^wrote \(.*\): [0-9][0-9]* lines$/\1/p'
+    local dir=$1
+    shift
+    ( cd "$dir" && "$SDD_SCRIPTS/task-brief" --print-path "$@" )
 }
 
 test_task_brief() {
@@ -263,25 +265,21 @@ Create it.
 PLAN
     local out brief
 
-    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan.md 1)"
-    brief="$(brief_path "$out")"
+    brief="$(brief_path "$REPO" plan.md 1)"
     assert_contains "$brief" "Do the sub change." "brief keeps the task text"
     assert_has_line "$brief" "     2  NESTED_RULE: never read a whole collection in one call." "Modify path with a line range gets nested rules"
     assert_has_line "$brief" "     2  ROOT_RULE: keep functions small." "brief gets root rules"
     assert_not_contains "$brief" "SIBLING_RULE" "brief excludes unrelated directories"
     assert_not_contains "$brief" "Do the root change." "brief stops at the next task"
 
-    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan.md 2)"
-    brief="$(brief_path "$out")"
+    brief="$(brief_path "$REPO" plan.md 2)"
     assert_contains "$brief" "ROOT_RULE" "root-level file gets root rules"
     assert_not_contains "$brief" "NESTED_RULE" "root-level file excludes nested rules"
 
-    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan.md 3)"
-    brief="$(brief_path "$out")"
+    brief="$(brief_path "$REPO" plan.md 3)"
     assert_not_contains "$brief" "## Instruction files" "no Files block, no section"
 
-    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan.md 4)"
-    brief="$(brief_path "$out")"
+    brief="$(brief_path "$REPO" plan.md 4)"
     assert_contains "$brief" "NESTED_RULE" "Create path in a new directory gets ancestor rules"
 
     mkdir -p "$TEST_ROOT/nogit"
@@ -293,6 +291,33 @@ PLAN
     else
         fail "outside a git repo: brief written, no section"
     fi
+}
+
+test_print_path() {
+    echo "--- --print-path ---"
+    local out lines pkg brief
+    out="$(cd "$REPO" && "$SDD_SCRIPTS/review-package" HEAD~1 HEAD)"
+    if [[ "$out" == "wrote $REPO/"*": "* ]]; then pass "review-package default output starts with 'wrote <path>:'"; else fail "review-package default output starts with 'wrote <path>:'"; echo "    got: $out"; fi
+    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan.md 1)"
+    if [[ "$out" == "wrote $REPO/"*": "* ]]; then pass "task-brief default output starts with 'wrote <path>:'"; else fail "task-brief default output starts with 'wrote <path>:'"; echo "    got: $out"; fi
+
+    out="$(cd "$REPO" && "$SDD_SCRIPTS/review-package" --print-path HEAD~1 HEAD -- pkg/sub/widget.js)"
+    lines="$(printf '%s\n' "$out" | wc -l | tr -d ' ')"
+    if [[ "$lines" == 1 && "$out" == /* && -f "$out" ]]; then pass "review-package --print-path: one line, an existing absolute file"; else fail "review-package --print-path: one line, an existing absolute file"; echo "    got: $out"; fi
+
+    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" --print-path plan.md 1)"
+    lines="$(printf '%s\n' "$out" | wc -l | tr -d ' ')"
+    if [[ "$lines" == 1 && "$out" == /* && -f "$out" ]]; then pass "task-brief --print-path: one line, an existing absolute file"; else fail "task-brief --print-path: one line, an existing absolute file"; echo "    got: $out"; fi
+
+    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" --print-path plan.md 1 rel-brief.md)"
+    lines="$(printf '%s\n' "$out" | wc -l | tr -d ' ')"
+    if [[ "$lines" == 1 && "$out" == "$REPO/rel-brief.md" && -f "$out" ]]; then pass "task-brief --print-path with a relative OUTFILE prints it absolute"; else fail "task-brief --print-path with a relative OUTFILE prints it absolute"; echo "    got: $out"; fi
+    rm -f "$REPO/rel-brief.md"
+
+    assert_exit 3 "task-brief --print-path: unknown task still exits 3" \
+        bash -c "cd '$REPO' && '$SDD_SCRIPTS/task-brief' --print-path plan.md 99"
+    assert_exit 2 "review-package --print-path: bad BASE still exits 2" \
+        bash -c "cd '$REPO' && '$SDD_SCRIPTS/review-package' --print-path nosuchrev HEAD"
 }
 
 test_instruction_files_extras() {
@@ -387,8 +412,7 @@ test_review_package_extras() {
     local out pkg
 
     ( cd "$REPO" && git config color.ui always && git config diff.external /bin/echo )
-    out="$(cd "$REPO" && "$SDD_SCRIPTS/review-package" HEAD~1 HEAD)"
-    pkg="$(package_path "$out")"
+    pkg="$(package_path "$REPO" HEAD~1 HEAD)"
     ( cd "$REPO" && git config --unset color.ui && git config --unset diff.external )
     assert_has_line "$pkg" " } // end renderPanel" "color.ui=always and diff.external do not empty the diff"
 
@@ -406,8 +430,7 @@ test_review_package_extras() {
         && printf '\000\001\003' > bin.dat \
         && git mv "old long.js" "dir b/new long.js" && sed -i.bak 's/  let mark = 0;/  let mark = 1;/' "dir b/new long.js" && rm -f "dir b/new long.js.bak" )
     commit_all "$rr" r2
-    out="$(cd "$rr" && SDD_CONTEXT_CAP=45 "$SDD_SCRIPTS/review-package" HEAD~1 HEAD)"
-    pkg="$(package_path "$out")"
+    pkg="$(SDD_CONTEXT_CAP=45 package_path "$rr" HEAD~1 HEAD)"
     assert_has_line "$pkg" "rename to new.txt" "rename shown"
     assert_contains "$pkg" "Binary files" "binary change shown"
     assert_has_line "$pkg" "# context capped: dir b/new long.js (function context over 45 lines; -U10 shown)" "capped path with a space and ' b/' extracted whole"
@@ -419,8 +442,7 @@ test_review_package_extras() {
     commit_all "$big" b1
     sed -i.bak 's/  let target = 0;/  let target = 1;/' "$big/huge.js" && rm -f "$big/huge.js.bak"
     commit_all "$big" b2
-    out="$(cd "$big" && "$SDD_SCRIPTS/review-package" HEAD~1 HEAD)"
-    pkg="$(package_path "$out")"
+    pkg="$(package_path "$big" HEAD~1 HEAD)"
     assert_contains "$pkg" "# context capped: huge.js" "20k-line function file: package produced, capped"
     assert_contains "$pkg" "+  let target = 1;" "20k-line function file: change present"
 
@@ -431,8 +453,7 @@ test_review_package_extras() {
     commit_all "$tc" t1
     ( cd "$tc" && rm a.txt && ln -s z.js a.txt && sed -i.bak 's/  let mark = 0;/  let mark = 1;/' z.js && rm -f z.js.bak )
     commit_all "$tc" t2
-    out="$(cd "$tc" && SDD_CONTEXT_CAP=45 "$SDD_SCRIPTS/review-package" HEAD~1 HEAD)"
-    pkg="$(package_path "$out")"
+    pkg="$(SDD_CONTEXT_CAP=45 package_path "$tc" HEAD~1 HEAD)"
     assert_has_line "$pkg" "# context capped: z.js (function context over 45 lines; -U10 shown)" "typechange before a capped file: label names the capped file"
     assert_not_contains "$pkg" "# context capped: a.txt" "typechanged file not labelled capped"
 }
@@ -449,8 +470,7 @@ test_snapshot_filemode() {
     printf 'b\n' >> "$fm/other.txt"
     before="$(cd "$fm" && git rev-parse 'HEAD^{tree}')"
     after="$(cd "$fm" && "$SDD_SCRIPTS/snapshot")"
-    out="$(cd "$fm" && "$SDD_SCRIPTS/review-package" "$before" "$after")"
-    pkg="$(package_path "$out")"
+    pkg="$(package_path "$fm" "$before" "$after")"
     assert_contains "$pkg" "+b" "unrelated change present"
     assert_not_contains "$pkg" "old mode" "no bogus mode change under core.fileMode=false"
 }
@@ -484,15 +504,12 @@ Nothing real here.
 **Files:**
 - Modify: `README.md` and call `renderPanel()`
 PLAN
-    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan2.md 1)"
-    brief="$(brief_path "$out")"
+    brief="$(brief_path "$REPO" plan2.md 1)"
     assert_contains "$brief" "ROOT_RULE" "block item parsed"
     assert_not_contains "$brief" "NESTED_RULE" "prose bullet after a blank line not parsed"
-    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan2.md 2)"
-    brief="$(brief_path "$out")"
+    brief="$(brief_path "$REPO" plan2.md 2)"
     assert_not_contains "$brief" "## Instruction files" "fenced Files example ignored"
-    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan2.md 3)"
-    brief="$(brief_path "$out")"
+    brief="$(brief_path "$REPO" plan2.md 3)"
     assert_contains "$brief" "ROOT_RULE" "real path still resolved beside a non-path token"
     assert_not_contains "$brief" "NESTED_RULE" "backticked non-path token pulls in no nested rules"
 
@@ -515,13 +532,11 @@ Do it.
 
 Do it.
 PLAN
-    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan3.md 1)"
-    brief="$(brief_path "$out")"
+    brief="$(brief_path "$REPO" plan3.md 1)"
     if [[ -n "$brief" && -f "$brief" ]]; then pass "dash-leading first token: brief written"; else fail "dash-leading first token: brief written"; fi
     assert_contains "$brief" "NESTED_RULE" "dash-leading first token: later path still resolved"
 
-    out="$(cd "$REPO" && "$SDD_SCRIPTS/task-brief" plan3.md 2)"
-    brief="$(brief_path "$out")"
+    brief="$(brief_path "$REPO" plan3.md 2)"
     assert_contains "$brief" "NESTED_RULE" "wrapped item: continuation line path resolved"
     assert_contains "$brief" "SIBLING_RULE" "wrapped item: following item still resolved"
 }
@@ -537,6 +552,7 @@ main() {
     test_instruction_files
     test_review_package
     test_task_brief
+    test_print_path
     test_instruction_files_extras
     test_review_package_extras
     test_snapshot_filemode

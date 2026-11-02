@@ -22,7 +22,9 @@
 # diff for that file, marked with a "# context capped:" line.
 # Cap: SDD_CONTEXT_CAP lines per file (default 400).
 #
-# Usage: review-package BASE HEAD [-- PATHSPEC...]
+# Usage: review-package [--print-path] BASE HEAD [-- PATHSPEC...]
+#   --print-path  print only the package's absolute path (one line) instead of
+#               the human `wrote <path>: ...` summary line.
 #   BASE        tree-ish before the task (e.g. HEAD^{tree}, or a snapshot SHA)
 #   HEAD        tree-ish after the task  (e.g. `scripts/snapshot` output)
 #   -- PATHSPEC limit the diff to these paths — use for one task inside a
@@ -36,8 +38,14 @@
 # always gets a distinctly named file.
 set -euo pipefail
 
+print_path=0
+if [ "${1:-}" = "--print-path" ]; then
+  print_path=1
+  shift
+fi
+
 if [ $# -lt 2 ]; then
-  echo "usage: review-package BASE HEAD [-- PATHSPEC...]" >&2
+  echo "usage: review-package [--print-path] BASE HEAD [-- PATHSPEC...]" >&2
   exit 2
 fi
 
@@ -51,7 +59,7 @@ if [ $# -gt 0 ]; then
     shift
     paths=("$@")
   else
-    echo "usage: review-package BASE HEAD [-- PATHSPEC...]" >&2
+    echo "usage: review-package [--print-path] BASE HEAD [-- PATHSPEC...]" >&2
     exit 2
   fi
 fi
@@ -172,4 +180,8 @@ fi
   cat "$tmp/diff"
 } > "$out"
 
-echo "wrote ${out}: ${#changed[@]} file(s) changed, $(wc -c < "$out" | tr -d ' ') bytes"
+if [ "$print_path" = 1 ]; then
+  printf '%s\n' "$out"
+else
+  echo "wrote ${out}: ${#changed[@]} file(s) changed, $(wc -c < "$out" | tr -d ' ') bytes"
+fi

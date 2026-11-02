@@ -11,13 +11,21 @@
 # first blank line after a list item, and a **Files:** inside a code fence is
 # ignored. No Files block, no governing file, or no git repo: no section.
 #
-# Usage: task-brief PLAN_FILE TASK_NUMBER [OUTFILE]
+# Usage: task-brief [--print-path] PLAN_FILE TASK_NUMBER [OUTFILE]
+#   --print-path  print only the brief's absolute path (one line) instead of
+#               the human `wrote <path>: N lines` summary line.
 # Default OUTFILE: <repo-root>/.superpowers/sdd/task-<N>-brief.md
 # (per worktree; concurrent runs in the same working tree share it).
 set -euo pipefail
 
+print_path=0
+if [ "${1:-}" = "--print-path" ]; then
+  print_path=1
+  shift
+fi
+
 if [ $# -lt 2 ] || [ $# -gt 3 ]; then
-  echo "usage: task-brief PLAN_FILE TASK_NUMBER [OUTFILE]" >&2
+  echo "usage: task-brief [--print-path] PLAN_FILE TASK_NUMBER [OUTFILE]" >&2
   exit 2
 fi
 
@@ -32,6 +40,9 @@ if [ $# -eq 3 ]; then
 else
   dir=$("$scripts/sdd-workspace")
   out="$dir/task-${n}-brief.md"
+fi
+if [ "$print_path" = 1 ]; then
+  case $out in /*) ;; *) out="$PWD/$out" ;; esac
 fi
 
 awk -v n="$n" '
@@ -77,4 +88,8 @@ if [ ${#files[@]} -gt 0 ] && git rev-parse --show-toplevel >/dev/null 2>&1; then
   fi
 fi
 
-echo "wrote ${out}: $(wc -l < "$out" | tr -d ' ') lines"
+if [ "$print_path" = 1 ]; then
+  printf '%s\n' "$out"
+else
+  echo "wrote ${out}: $(wc -l < "$out" | tr -d ' ') lines"
+fi

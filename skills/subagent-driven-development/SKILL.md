@@ -275,7 +275,7 @@ Implementer subagents report one of four statuses. Handle each appropriately:
 **DONE:** The implementer left its work uncommitted in the working tree. Capture it and review it:
 1. `AFTER=$(scripts/snapshot)` — tree SHA of the working tree now.
 2. `BASE` is the tree before this task: `HEAD^{tree}` for a sequential task, or the snapshot you recorded before dispatching a parallel batch.
-3. `scripts/review-package "$BASE" "$AFTER"` (add `-- <this task's files>` when the task is one of a parallel batch) — it prints the unique diff path. The package carries the AGENTS.md / CLAUDE.md files that govern the changed files (read from `$AFTER`) and widens each hunk to its enclosing function; a file whose function context exceeds `SDD_CONTEXT_CAP` lines (default 400) falls back to `-U10` and is marked `# context capped`.
+3. `scripts/review-package "$BASE" "$AFTER"` (add `-- <this task's files>` when the task is one of a parallel batch) — it prints the unique diff path (`--print-path` makes the path the only output). The package carries the AGENTS.md / CLAUDE.md files that govern the changed files (read from `$AFTER`) and widens each hunk to its enclosing function; a file whose function context exceeds `SDD_CONTEXT_CAP` lines (default 400) falls back to `-U10` and is marked `# context capped`.
 4. Dispatch the task reviewer with the printed path. Do NOT commit yet — you commit only after the review passes (see [Committing](#committing)).
 
 **DONE_WITH_CONCERNS:** The implementer completed the work but flagged doubts. Read the concerns before proceeding. If the concerns are about correctness or scope, address them before review. If they're observations (e.g., "this file is getting large"), note them and proceed to review.
@@ -502,7 +502,8 @@ and is re-read on every later turn. Hand artifacts over as files:
 
 - **Task brief:** before dispatching an implementer, run this skill's
   `scripts/task-brief PLAN_FILE N` — it extracts the task's full text to a
-  uniquely named file and prints the path. The brief ends with the
+  uniquely named file and prints the path (`--print-path` makes the path
+  the only output). The brief ends with the
   AGENTS.md / CLAUDE.md files that govern the paths in the task's
   **Files:** block; they bind the implementer. Every dispatch is the implementer
   contract (above — non-negotiable) plus task framing, with the brief as the
