@@ -28,8 +28,18 @@ dir=$("$(cd "$(dirname "$0")" && pwd)/sdd-workspace")
 tmpidx="$dir/snapshot.$$.index"
 trap 'rm -f "$tmpidx"' EXIT
 
+# Seed the temp index from the real one so entry modes survive: under
+# core.fileMode=false a fresh index would record every file as 100644.
+# Seeding also carries assume-unchanged / skip-worktree flags, so edits to
+# such files are not captured, the same as what the controller's `git add`
+# would commit.
+realidx=$(git rev-parse --git-path index)
+if [ -f "$realidx" ]; then
+  cp -- "$realidx" "$tmpidx"
+fi
+
 # Stage the entire working tree (respecting .gitignore) into the temp index,
 # then hash it into a tree object. -A captures additions, modifications, and
-# deletions relative to an empty index = a faithful image of the working tree.
+# deletions relative to the seeded index = a faithful image of the working tree.
 GIT_INDEX_FILE="$tmpidx" git add -A
 GIT_INDEX_FILE="$tmpidx" git write-tree

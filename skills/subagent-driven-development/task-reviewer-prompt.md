@@ -38,20 +38,36 @@ Subagent (general-purpose):
     Read the diff file once — it contains a stat summary and the full diff
     with surrounding context, and it is your view of the change. The work is
     uncommitted (the controller commits after this review), so there is no
-    commit list. The diff's context lines ARE the changed files: do not Read a
-    changed file separately unless a hunk you must judge is cut off
-    mid-function — and say so in your report. Do not re-run git commands.
+    commit list. Each hunk shows its whole enclosing function; a file marked
+    `# context capped` shows 10 lines of context instead. Do not Read a
+    changed file separately unless a hunk you must judge is cut off — and
+    say so in your report. Do not re-run git commands.
     If the diff file is missing, fetch the diff yourself:
-    `git diff --stat [BASE_SHA] [HEAD_SHA]` and `git diff [BASE_SHA] [HEAD_SHA]`.
+    `git diff --no-color --no-ext-diff --stat [BASE_SHA] [HEAD_SHA]` and
+    `git diff --no-color --no-ext-diff --function-context [BASE_SHA] [HEAD_SHA]`,
+    and read every AGENTS.md / CLAUDE.md from the repo root down to each
+    changed file's directory.
     Do not crawl the broader codebase. Inspect code outside the diff only
     to evaluate a concrete risk you can name — one focused check per named
     risk, and name both the risk and what you checked in your report.
     Cross-cutting changes are legitimate named risks: if the diff changes
     lock ordering, a function or API contract, or shared mutable state,
     checking the call sites is the right method.
+    New code inside unchanged code is a named risk by default: when new
+    state, an effect, a resource, or a side effect sits inside or is called
+    from code the diff does not show (a capped file, a caller), one focused
+    read of that code is expected.
 
     Your review is read-only on this checkout. Do not mutate the working
     tree, the index, HEAD, or branch state in any way.
+
+    ## Binding Instructions
+
+    The diff file's "Instruction files (binding)" section holds every
+    AGENTS.md / CLAUDE.md that governs the changed files, with line numbers.
+    Their rules bind this task like the spec does. A change that breaks one
+    is an Important finding by default: cite the rule as path:line next to
+    the code's file:line.
 
     ## Do Not Trust the Report
 
@@ -105,6 +121,10 @@ Subagent (general-purpose):
     - Proper error handling?
     - DRY without premature abstraction?
     - Edge cases handled?
+    - For each piece of new state, effect, resource or side effect, check the
+      unchanged code that encloses or calls it: lifecycle and remount
+      behaviour, reactivity/keying, transaction or request scope, loops and
+      limits. A bug can come from new code placed inside old code.
 
     **Tests:**
     - Do the new and changed tests verify real behavior, not mocks?
@@ -188,7 +208,8 @@ Subagent (general-purpose):
 - `[HEAD_SHA]` — tree-ish after this task (`scripts/snapshot` output)
 - `[DIFF_FILE]` — REQUIRED: the path the controller wrote the review
   package to (`scripts/review-package BASE HEAD` prints the unique path it
-  wrote; the package never enters the controller's context)
+  wrote; the package never enters the controller's context). It carries the
+  governing instruction files and each hunk's enclosing function.
 
 **Reviewer returns:** Spec Compliance verdict (✅/❌/⚠️), Strengths, Issues
 (Critical/Important/Minor), Task quality verdict

@@ -23,3 +23,8 @@ jobs:
           # A new branch push has an all-zero "before" SHA; skip the bump check then.
           if [[ "$BASE_REF" =~ ^0+$ ]]; then BASE_REF=""; fi
           bash scripts/check-release.sh "$BASE_REF"
+
+      - name: SDD script tests
+        run: |
+          bash tests/claude-code/test-sdd-workspace.sh
+          bash tests/claude-code/test-sdd-review-context.sh

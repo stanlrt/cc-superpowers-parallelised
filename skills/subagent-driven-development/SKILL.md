@@ -275,7 +275,7 @@ Implementer subagents report one of four statuses. Handle each appropriately:
 **DONE:** The implementer left its work uncommitted in the working tree. Capture it and review it:
 1. `AFTER=$(scripts/snapshot)` — tree SHA of the working tree now.
 2. `BASE` is the tree before this task: `HEAD^{tree}` for a sequential task, or the snapshot you recorded before dispatching a parallel batch.
-3. `scripts/review-package "$BASE" "$AFTER"` (add `-- <this task's files>` when the task is one of a parallel batch) — it prints the unique diff path.
+3. `scripts/review-package "$BASE" "$AFTER"` (add `-- <this task's files>` when the task is one of a parallel batch) — it prints the unique diff path (`--print-path` makes the path the only output). The package carries the AGENTS.md / CLAUDE.md files that govern the changed files (read from `$AFTER`) and widens each hunk to its enclosing function; a file whose function context exceeds `SDD_CONTEXT_CAP` lines (default 400) falls back to `-U10` and is marked `# context capped`.
 4. Dispatch the task reviewer with the printed path. Do NOT commit yet — you commit only after the review passes (see [Committing](#committing)).
 
 **DONE_WITH_CONCERNS:** The implementer completed the work but flagged doubts. Read the concerns before proceeding. If the concerns are about correctness or scope, address them before review. If they're observations (e.g., "this file is getting large"), note them and proceed to review.
@@ -324,8 +324,11 @@ final whole-branch review. When you fill a reviewer template:
 - Hand the reviewer its diff as a file — the `scripts/review-package` path
   from [Handling Implementer Status](#handling-implementer-status), never
   pasted into your own context. The package has no commit list (the work is
-  uncommitted) — that is expected. Without bash: `git diff --stat BASE AFTER`
-  and `git diff -U10 BASE AFTER` redirected to one uniquely named file.
+  uncommitted) — that is expected. Without bash:
+  `git diff --no-color --no-ext-diff --stat BASE AFTER` and
+  `git diff --no-color --no-ext-diff --function-context BASE AFTER`
+  redirected to one uniquely named file, plus every AGENTS.md / CLAUDE.md
+  from the repo root down to each changed file's directory appended to it.
 - A dispatch prompt describes one task, not the session's history. Do not
   paste accumulated prior-task summaries ("state after Tasks 1-3") into
   later dispatches — a real session's dispatch hit 42k chars of which 99%
@@ -499,7 +502,10 @@ and is re-read on every later turn. Hand artifacts over as files:
 
 - **Task brief:** before dispatching an implementer, run this skill's
   `scripts/task-brief PLAN_FILE N` — it extracts the task's full text to a
-  uniquely named file and prints the path. Every dispatch is the implementer
+  uniquely named file and prints the path (`--print-path` makes the path
+  the only output). The brief ends with the
+  AGENTS.md / CLAUDE.md files that govern the paths in the task's
+  **Files:** block; they bind the implementer. Every dispatch is the implementer
   contract (above — non-negotiable) plus task framing, with the brief as the
   single source of requirements. The framing, on top of the contract:
   (1) one line on where this task fits in the project; (2) the brief path,

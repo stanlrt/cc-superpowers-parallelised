@@ -3,13 +3,29 @@
 # implementer reads in one call, so the task text never has to be pasted
 # through the controller's context.
 #
-# Usage: task-brief PLAN_FILE TASK_NUMBER [OUTFILE]
+# The brief ends with the instruction files (AGENTS.md / CLAUDE.md) that
+# govern the task's files: every backticked path on a list line of the
+# task's **Files:** block (a trailing :N or :N-M line range is stripped),
+# resolved by the sibling `instruction-files` helper against the working
+# tree. An indented line after an item continues it. The block ends at the
+# first blank line after a list item, and a **Files:** inside a code fence is
+# ignored. No Files block, no governing file, or no git repo: no section.
+#
+# Usage: task-brief [--print-path] PLAN_FILE TASK_NUMBER [OUTFILE]
+#   --print-path  print only the brief's absolute path (one line) instead of
+#               the human `wrote <path>: N lines` summary line.
 # Default OUTFILE: <repo-root>/.superpowers/sdd/task-<N>-brief.md
 # (per worktree; concurrent runs in the same working tree share it).
 set -euo pipefail
 
+print_path=0
+if [ "${1:-}" = "--print-path" ]; then
+  print_path=1
+  shift
+fi
+
 if [ $# -lt 2 ] || [ $# -gt 3 ]; then
-  echo "usage: task-brief PLAN_FILE TASK_NUMBER [OUTFILE]" >&2
+  echo "usage: task-brief [--print-path] PLAN_FILE TASK_NUMBER [OUTFILE]" >&2
   exit 2
 fi
 
@@ -17,15 +33,20 @@ plan=$1
 n=$2
 [ -f "$plan" ] || { echo "no such plan file: $plan" >&2; exit 2; }
 
+scripts=$(cd "$(dirname "$0")" && pwd)
+
 if [ $# -eq 3 ]; then
   out=$3
 else
-  dir=$("$(cd "$(dirname "$0")" && pwd)/sdd-workspace")
+  dir=$("$scripts/sdd-workspace")
   out="$dir/task-${n}-brief.md"
+fi
+if [ "$print_path" = 1 ]; then
+  case $out in /*) ;; *) out="$PWD/$out" ;; esac
 fi
 
 awk -v n="$n" '
-  /^```/ { infence = !infence }
+  /^[ \t]*```/ { infence = !infence }
   !infence && /^#+[ \t]+Task[ \t]+[0-9]+/ {
     intask = ($0 ~ ("^#+[ \t]+Task[ \t]+" n "([^0-9]|$)"))
   }
@@ -37,4 +58,38 @@ if [ ! -s "$out" ]; then
   exit 3
 fi
 
-echo "wrote ${out}: $(wc -l < "$out" | tr -d ' ') lines"
+files=()
+while IFS= read -r f; do
+  files+=("$f")
+done < <(awk '
+  # Print each backticked token of LINE, minus a trailing :N or :N-M range.
+  function emit(line,   tok) {
+    while (match(line, /`[^`]+`/)) {
+      tok = substr(line, RSTART + 1, RLENGTH - 2)
+      sub(/:[0-9]+(-[0-9]+)?$/, "", tok)
+      print tok
+      line = substr(line, RSTART + RLENGTH)
+    }
+  }
+  /^[ \t]*```/ { infence = !infence; inblock = 0; next }
+  infence { next }
+  /^\*\*Files:\*\*/ { inblock = 1; seen = 0; next }
+  inblock && /^[ \t]*[-*][ \t]/ { seen = 1; emit($0); next }
+  # An indented line after an item continues that (wrapped) item.
+  inblock && seen && /^[ \t]+[^ \t]/ { emit($0); next }
+  inblock && /^[ \t]*$/ { if (seen) inblock = 0; next }
+  { inblock = 0 }
+' "$out")
+
+if [ ${#files[@]} -gt 0 ] && git rev-parse --show-toplevel >/dev/null 2>&1; then
+  section=$("$scripts/instruction-files" -- "${files[@]}")
+  if [ -n "$section" ]; then
+    printf '\n%s\n' "$section" >> "$out"
+  fi
+fi
+
+if [ "$print_path" = 1 ]; then
+  printf '%s\n' "$out"
+else
+  echo "wrote ${out}: $(wc -l < "$out" | tr -d ' ') lines"
+fi

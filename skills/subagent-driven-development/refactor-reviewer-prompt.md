@@ -91,7 +91,16 @@ Subagent (general-purpose):
     Read the diff file once — it is a stat summary plus the full branch diff
     with context, and it is the set of changes you are judging. If it is
     missing, regenerate it yourself:
-    `git diff --stat [BASE_SHA]..[HEAD_SHA]` and `git diff [BASE_SHA]..[HEAD_SHA]`.
+    `git diff --no-color --no-ext-diff --stat [BASE_SHA]..[HEAD_SHA]` and
+    `git diff --no-color --no-ext-diff --function-context [BASE_SHA]..[HEAD_SHA]`,
+    and read every AGENTS.md / CLAUDE.md from the repo root down to each
+    changed file's directory.
+
+    The diff file's "Instruction files (binding)" section holds every
+    AGENTS.md / CLAUDE.md that governs the changed files, with line numbers.
+    Those rules are binding: do not propose a refactor that breaks one. A rule
+    the branch already breaks is the correctness reviewer's finding; do not
+    file it as Refactor-Critical.
 
     ## You MAY read the whole codebase — that is the point
 
@@ -132,6 +141,10 @@ Subagent (general-purpose):
     - Primitive obsession — bare strings/ints/maps where a small type would
       remove a class of mistakes
     - Naming drift — the same concept named differently across tasks
+    - For each piece of new state, effect, resource or side effect, check the
+      unchanged code that encloses or calls it: lifecycle and remount
+      behaviour, reactivity/keying, transaction or request scope, loops and
+      limits. A bug can come from new code placed inside old code.
     - Structure that works now but will force a painful change on the next
       feature that touches it
 

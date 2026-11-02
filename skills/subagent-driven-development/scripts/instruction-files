@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# Print the instruction files (AGENTS.md, CLAUDE.md) that govern a set of
+# paths, as one markdown section a reviewer or implementer reads with the
+# change. A file governs a path when it sits in the repo root or in any
+# directory on the way down to that path's directory.
+#
+# A nested instruction file holds rules no brief repeats, and a harness loads
+# it only when an agent happens to read a file in that directory. Gathering
+# the files by script, not by memory, puts every governing rule in front of
+# the subagent.
+#
+# Usage: instruction-files [--tree TREEISH] [--] PATH...
+#   PATH            repo-root-relative path. It need not exist: a file a task
+#                   will create still gets the files of its existing ancestors.
+#   --              end of options, so a PATH may start with "-".
+#   --tree TREEISH  read the instruction files from this tree (a commit, or a
+#                   `snapshot` tree SHA) instead of the working tree.
+#
+# Output: nothing when no instruction file governs any PATH. Otherwise a
+# "## Instruction files (binding)" section: the file paths (root first, then
+# by depth), then each file's content with line numbers, so a finding can
+# cite path:line. A file byte-identical to one already printed gets a heading
+# that names the first file instead of its content. `@file` imports are not
+# resolved.
+set -euo pipefail
+
+usage() {
+  echo "usage: instruction-files [--tree TREEISH] [--] PATH..." >&2
+  exit 2
+}
+
+tree=""
+case "${1:-}" in
+  --tree)
+    [ $# -ge 2 ] || usage
+    tree=$2
+    shift 2
+    ;;
+esac
+case "${1:-}" in
+  --) shift ;;
+  -*) usage ;;
+esac
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "not inside a git repository" >&2; exit 2; }
+if [ -n "$tree" ]; then
+  git rev-parse --verify --quiet "${tree}^{tree}" >/dev/null || { echo "bad TREEISH: $tree" >&2; exit 2; }
+fi
+cd "$root"
+
+# Instruction file names, checked in every directory.
+names="AGENTS.md CLAUDE.md"
+
+# Most symlink hops either resolver follows before giving up.
+max_hops=10
+
+# in_repo PATH — true when PATH, with symlinks resolved, stays inside the repo
+# root (a working-tree read must not follow a link out of the repository).
+in_repo() {
+  local p=$1 hops=0 t d
+  while [ -L "$p" ]; do
+    [ "$hops" -lt "$max_hops" ] || return 1
+    hops=$((hops + 1))
+    t=$(readlink -- "$p")
+    case $t in /*) p=$t ;; *) p=$(dirname -- "$p")/$t ;; esac
+  done
+  d=$(cd -P -- "$(dirname -- "$p")" 2>/dev/null && pwd -P) || return 1
+  case $d/ in "$root"/*) return 0 ;; esac
+  return 1
+}
+
+# is_file PATH — true when PATH is a regular file in the source.
+is_file() {
+  if [ -n "$tree" ]; then
+    [ "$(git cat-file -t "${tree}:$1" 2>/dev/null)" = blob ]
+  else
+    [ -f "$1" ]
+  fi
+}
+
+# join_path DIR TARGET — DIR/TARGET with ./ and ../ folded away. Fails when
+# TARGET is absolute or climbs above the repo root.
+join_path() {
+  local parts part out
+  out=()
+  case $2 in /*) return 1 ;; esac
+  IFS=/ read -r -a parts <<< "$1/$2"
+  for part in "${parts[@]}"; do
+    case $part in
+      ''|.) ;;
+      ..)
+        [ ${#out[@]} -gt 0 ] || return 1
+        unset "out[$((${#out[@]} - 1))]"
+        ;;
+      *) out+=("$part") ;;
+    esac
+  done
+  [ ${#out[@]} -gt 0 ] || return 1
+  (IFS=/; printf '%s\n' "${out[*]}")
+}
+
+# tree_blob PATH — blob SHA of PATH in the tree, following symlink entries
+# (mode 120000) to the blob they name, as a working-tree read would. Fails
+# when PATH is not in the tree or the link does not resolve to a blob.
+tree_blob() {
+  local p=$1 hops=0 mode type sha target
+  while [ "$hops" -lt "$max_hops" ]; do
+    read -r mode type sha _ < <(git ls-tree "$tree" -- "$p") || return 1
+    [ -n "${sha:-}" ] || return 1
+    if [ "$mode" = 120000 ]; then
+      target=$(git cat-file blob "$sha")
+      p=$(join_path "$(dirname -- "$p")" "$target") || return 1
+      hops=$((hops + 1))
+    elif [ "$type" = blob ]; then
+      printf '%s\n' "$sha"
+      return 0
+    else
+      return 1
+    fi
+  done
+  return 1
+}
+
+# show PATH — print PATH's content from the source.
+show() {
+  if [ -n "$tree" ]; then
+    git cat-file blob "$(tree_blob "$1")"
+  else
+    cat -- "$1"
+  fi
+}
+
+# blob_id PATH — git blob SHA of PATH's content; equal SHAs mean equal bytes.
+blob_id() {
+  if [ -n "$tree" ]; then
+    tree_blob "$1"
+  else
+    git hash-object -- "$1"
+  fi
+}
+
+# candidates PATH... — AGENTS.md and CLAUDE.md in the root and in every
+# directory on the way down to each PATH's directory, one per line.
+candidates() {
+  local p d acc part name
+  local parts
+  for p in "$@"; do
+    p=${p#./}
+    for name in $names; do printf '%s\n' "$name"; done
+    d=$(dirname -- "$p")
+    [ "$d" = . ] && continue
+    acc=""
+    IFS=/ read -r -a parts <<< "$d"
+    for part in "${parts[@]}"; do
+      acc=${acc:+$acc/}$part
+      for name in $names; do printf '%s\n' "$acc/$name"; done
+    done
+  done
+}
+
+tab=$(printf '\t')
+found=()
+while IFS= read -r f; do
+  if is_file "$f"; then
+    found+=("$f")
+  fi
+done < <(candidates "$@" | awk -F/ '{ print NF "\t" $0 }' | LC_ALL=C sort -t "$tab" -k1,1n -k2 -u | cut -f2-)
+
+if [ ${#found[@]} -eq 0 ]; then
+  exit 0
+fi
+
+echo "## Instruction files (binding)"
+echo
+echo "These files govern the files in scope. Their rules are binding constraints."
+echo "Cite a rule as path:line."
+echo
+for f in "${found[@]}"; do
+  echo "- $f"
+done
+
+seen_ids=()
+seen_paths=()
+for f in "${found[@]}"; do
+  if [ -z "$tree" ] && ! in_repo "$f"; then
+    echo
+    echo "### $f — symlink outside the repository (not read)"
+    continue
+  fi
+  if ! id=$(blob_id "$f"); then
+    echo
+    echo "### $f — symlink to $(git cat-file blob "${tree}:$f")"
+    continue
+  fi
+  dup=""
+  i=0
+  while [ "$i" -lt "${#seen_ids[@]}" ]; do
+    if [ "${seen_ids[$i]}" = "$id" ]; then
+      dup=${seen_paths[$i]}
+      break
+    fi
+    i=$((i + 1))
+  done
+  echo
+  if [ -n "$dup" ]; then
+    echo "### $f — identical to $dup"
+  else
+    echo "### $f"
+    show "$f" | awk '{ printf "%6d  %s\n", NR, $0 }'
+    seen_ids+=("$id")
+    seen_paths+=("$f")
+  fi
+done

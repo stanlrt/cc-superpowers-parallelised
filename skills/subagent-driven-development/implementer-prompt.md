@@ -18,7 +18,11 @@ Subagent (general-purpose):
     ## Task Description
 
     Read your task brief first: [BRIEF_FILE]
-    It contains the full task text from the plan.
+    It contains the full task text from the plan. Its "Instruction files
+    (binding)" section, when present, holds the AGENTS.md / CLAUDE.md rules
+    that govern your files. Follow them like the task text. When a rule
+    shaped a decision or ruled out an approach, cite it (path:line) in your
+    report.
 
     ## Context
 
@@ -120,6 +124,10 @@ Subagent (general-purpose):
     - Is this my best work?
     - Are names clear and accurate (match what things do, not how they work)?
     - Is the code clean and maintainable?
+    - For each piece of new state, effect, resource or side effect, did I
+      check the unchanged code that encloses or calls it: lifecycle and
+      remount behaviour, reactivity/keying, transaction or request scope,
+      loops and limits? A bug can come from new code placed inside old code.
 
     **Discipline:**
     - Did I avoid overbuilding (YAGNI)?

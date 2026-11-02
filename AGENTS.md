@@ -33,13 +33,22 @@ These skills carry custom behavior (everything else tracks upstream verbatim):
   `scripts/plan-batches` (python3, stdlib-only) computes the batch topology
   deterministically — rejecting phantom edges whose `consumes=` names a theme
   rather than a symbol, so controllers stop over-serializing "related" tasks.
+  Review packages and task briefs carry the AGENTS.md / CLAUDE.md files on
+  the path from the repo root to each changed (or brief-listed) file,
+  gathered by `scripts/instruction-files`; review packages also widen each
+  hunk to its enclosing function (`git diff --function-context`, capped per
+  file by `SDD_CONTEXT_CAP`). Reviewer and implementer templates treat those
+  files as binding and check new code against the unchanged code that
+  encloses it. `tests/claude-code/test-sdd-review-context.sh` covers the
+  scripts and runs in CI.
 - **finishing-a-development-branch** — live-browser check of heavy UI changes with
   `chrome-devtools-axi` (skipped when axi is not installed); PR body from the repo's
   PR template via `--body-file`; after opening, monitor CI + Copilot + Code-Quality
   comments.
 - **requesting-code-review** / **verification-before-completion** — Minor findings
   are fixed before the branch is done; heavy UI changes need live-browser evidence
-  when axi is installed.
+  when axi is installed. The code reviewer reads a review package built by the
+  SDD `review-package` script.
 - **using-git-worktrees** — GitHub issue → linked branch entry points.
 - **writing-plans** / **brainstorming** — no approval stop between spec approval and
   branch finish: after saving the plan, execution starts with

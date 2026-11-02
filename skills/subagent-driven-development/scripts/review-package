@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Generate a review package: a stat summary and the net diff with extended
-# context, written to a file the reviewer reads in one call.
+# Generate a review package: a stat summary, the instruction files that
+# govern the changed files, and the net diff with each hunk widened to its
+# enclosing function, written to a file the reviewer reads in one call.
 #
 # This fork runs the no-commit model: implementer subagents leave their work
 # in the working tree and the controller commits after review. BASE and HEAD
@@ -9,7 +10,21 @@
 # either. There is no commit list to show because the task is not yet
 # committed.
 #
-# Usage: review-package BASE HEAD [-- PATHSPEC...]
+# Instruction files: every AGENTS.md / CLAUDE.md from the repo root down to
+# each changed file's directory, read from HEAD (the tree under review, not
+# the working tree, which in a parallel batch holds other tasks' edits), via
+# the sibling `instruction-files` helper.
+#
+# Context: each file's diff uses `git diff --function-context`, so a hunk
+# shows its whole enclosing function as git's funcname rule (or the repo's
+# .gitattributes diff driver) finds it. When a file's function-context diff
+# is over the cap and its -U10 diff is smaller, the package shows the -U10
+# diff for that file, marked with a "# context capped:" line.
+# Cap: SDD_CONTEXT_CAP lines per file (default 400).
+#
+# Usage: review-package [--print-path] BASE HEAD [-- PATHSPEC...]
+#   --print-path  print only the package's absolute path (one line) instead of
+#               the human `wrote <path>: ...` summary line.
 #   BASE        tree-ish before the task (e.g. HEAD^{tree}, or a snapshot SHA)
 #   HEAD        tree-ish after the task  (e.g. `scripts/snapshot` output)
 #   -- PATHSPEC limit the diff to these paths — use for one task inside a
@@ -23,8 +38,14 @@
 # always gets a distinctly named file.
 set -euo pipefail
 
+print_path=0
+if [ "${1:-}" = "--print-path" ]; then
+  print_path=1
+  shift
+fi
+
 if [ $# -lt 2 ]; then
-  echo "usage: review-package BASE HEAD [-- PATHSPEC...]" >&2
+  echo "usage: review-package [--print-path] BASE HEAD [-- PATHSPEC...]" >&2
   exit 2
 fi
 
@@ -38,15 +59,21 @@ if [ $# -gt 0 ]; then
     shift
     paths=("$@")
   else
-    echo "usage: review-package BASE HEAD [-- PATHSPEC...]" >&2
+    echo "usage: review-package [--print-path] BASE HEAD [-- PATHSPEC...]" >&2
     exit 2
   fi
 fi
 
+cap=${SDD_CONTEXT_CAP:-400}
+case $cap in
+  ''|*[!0-9]*|0) echo "SDD_CONTEXT_CAP must be a positive integer: $cap" >&2; exit 2 ;;
+esac
+
 git rev-parse --verify --quiet "$base^{tree}" >/dev/null 2>&1 || git rev-parse --verify --quiet "$base" >/dev/null || { echo "bad BASE: $base" >&2; exit 2; }
 git rev-parse --verify --quiet "$head^{tree}" >/dev/null 2>&1 || git rev-parse --verify --quiet "$head" >/dev/null || { echo "bad HEAD: $head" >&2; exit 2; }
 
-dir=$("$(cd "$(dirname "$0")" && pwd)/sdd-workspace")
+scripts=$(cd "$(dirname "$0")" && pwd)
+dir=$("$scripts/sdd-workspace")
 name="review-$(git rev-parse --short "$base")..$(git rev-parse --short "$head")"
 if [ ${#paths[@]} -gt 0 ]; then
   # Keep the file unique when several per-task reviews share one BASE..HEAD
@@ -56,19 +83,105 @@ if [ ${#paths[@]} -gt 0 ]; then
 fi
 out="$dir/${name}.diff"
 
+tmp=$(mktemp -d "$dir/review-package.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+
+# Every diff call pins the output format: no colour, no external diff driver,
+# and a/ b/ prefixes, so a user's git config cannot change what is parsed.
+range=("$base" "$head")
+if [ ${#paths[@]} -gt 0 ]; then
+  range+=(-- "${paths[@]}")
+fi
+gitdiff=(git -c diff.relative=false diff --no-color --no-ext-diff --submodule=short)
+ctx=10
+
+# Changed paths (NUL-safe, for the instruction-files argv) and the display
+# names, one per diff chunk in the order git lists the chunks. A typechange
+# (file <-> symlink) is two chunks under one path, so its name is listed
+# twice; a rename or copy lists its new path. A path holding a newline is
+# shown with it escaped as \n, because awk reads the names one per line (and
+# mawk cannot split on NUL).
+changed=()
+nl=$'\n'
+esc='\n'
+: > "$tmp/names"
+while IFS= read -r -d '' status; do
+  IFS= read -r -d '' f
+  case $status in R*|C*) IFS= read -r -d '' f ;; esac
+  changed+=("$f")
+  shown=${f//$nl/$esc}
+  printf '%s\n' "$shown" >> "$tmp/names"
+  case $status in T*) printf '%s\n' "$shown" >> "$tmp/names" ;; esac
+done < <("${gitdiff[@]}" --name-status -z "${range[@]}")
+
+"$scripts/instruction-files" --tree "$head" -- ${changed[@]+"${changed[@]}"} > "$tmp/instr"
+
+diffargs=(--src-prefix=a/ --dst-prefix=b/)
+"${gitdiff[@]}" "${diffargs[@]}" --function-context -U"$ctx" "${range[@]}" > "$tmp/wide"
+"${gitdiff[@]}" "${diffargs[@]}" -U"$ctx" "${range[@]}" > "$tmp/plain"
+
+# Both diffs cover the same range and pathspec, so they list the same files
+# in the same order, and so does the name list. Pair them file by file and
+# keep the function-context chunk unless it is over the cap and the plain
+# chunk is smaller (a new or fully rewritten file has equal chunks and keeps
+# its full text). Each chunk streams to its own file so a large file costs
+# time linear in its size; awk keeps only line counts.
+: > "$tmp/capped"
+awk -v cap="$cap" -v ctx="$ctx" -v capped="$tmp/capped" -v names="$tmp/names" \
+    -v wide="$tmp/wide" -v dir="$tmp" '
+  BEGIN { while ((getline line < names) > 0) name[++nn] = line }
+  FNR == 1 { if (cur != "") close(cur); cur = ""; src = (FILENAME == wide) ? 1 : 2 }
+  /^diff --git / {
+    if (cur != "") close(cur)
+    n[src]++
+    cur = dir "/chunk." src "." n[src]
+  }
+  cur != "" { print > cur; len[src, n[src]]++ }
+  END {
+    if (cur != "") close(cur)
+    for (i = 1; i <= n[1]; i++) {
+      pick = 1
+      if (len[1, i] > cap && len[2, i] < len[1, i]) {
+        pick = 2
+        printf "# context capped: %s (function context over %d lines; -U%d shown)\n", name[i], cap, ctx
+        print name[i] > capped
+      }
+      f = dir "/chunk." pick "." i
+      while ((getline line < f) > 0) print line
+      close(f)
+    }
+  }
+' "$tmp/wide" "$tmp/plain" > "$tmp/diff"
+
+if [ -s "$tmp/wide" ] && [ ! -s "$tmp/diff" ]; then
+  echo "review-package: the diff is non-empty but no file chunk could be read from it" >&2
+  exit 1
+fi
+
 {
   echo "# Review package: ${base}..${head}"
   if [ ${#paths[@]} -gt 0 ]; then
     echo "# Scoped to: ${paths[*]}"
   fi
   echo "# (no-commit model: changes are uncommitted in the working tree)"
+  echo "# Context: each hunk shows its whole enclosing function (cap: ${cap} lines per file)"
+  if [ -s "$tmp/capped" ]; then
+    echo "# Context capped (-U${ctx} shown): $(paste -sd' ' "$tmp/capped")"
+  fi
   echo
   echo "## Files changed"
-  git diff --stat "$base" "$head" ${paths[@]:+-- "${paths[@]}"}
+  "${gitdiff[@]}" --stat "${range[@]}"
   echo
+  if [ -s "$tmp/instr" ]; then
+    cat "$tmp/instr"
+    echo
+  fi
   echo "## Diff"
-  git diff -U10 "$base" "$head" ${paths[@]:+-- "${paths[@]}"}
+  cat "$tmp/diff"
 } > "$out"
 
-files=$(git diff --name-only "$base" "$head" ${paths[@]:+-- "${paths[@]}"} | wc -l | tr -d ' ')
-echo "wrote ${out}: ${files} file(s) changed, $(wc -c < "$out" | tr -d ' ') bytes"
+if [ "$print_path" = 1 ]; then
+  printf '%s\n' "$out"
+else
+  echo "wrote ${out}: ${#changed[@]} file(s) changed, $(wc -c < "$out" | tr -d ' ') bytes"
+fi
